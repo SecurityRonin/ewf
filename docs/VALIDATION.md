@@ -6,13 +6,13 @@ Every byte of decompressed media is hashed and compared — not sampled.
 
 ## Test Environment
 
-| Component | Version |
-|-----------|---------|
-| ewf crate | 0.1.0 |
-| libewf (ewfexport) | 20231119 |
-| Sleuth Kit (img_cat) | 4.12.1 |
-| Rust | 1.88.0 |
-| Platform | macOS Darwin 24.6.0 (aarch64) |
+| Component | Version | Source |
+|-----------|---------|--------|
+| ewf crate | 0.1.0 | [crates.io](https://crates.io/crates/ewf) |
+| [libewf](https://github.com/libyal/libewf) (ewfexport) | 20231119 | Homebrew (`brew install libewf`) |
+| [The Sleuth Kit](https://github.com/sleuthkit/sleuthkit) (img_cat) | 4.12.1 | Homebrew (`brew install sleuthkit`) |
+| Rust (rustc) | 1.88.0 (6b00bc388) | [rustup.rs](https://rustup.rs/) |
+| Platform | macOS Darwin 24.6.0, arm64 (Apple Silicon) | — |
 
 ## Test Images
 
