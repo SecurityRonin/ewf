@@ -26,9 +26,8 @@ reader.seek(SeekFrom::Start(1_048_576))?;
 
 ## Install
 
-```toml
-[dependencies]
-ewf = "0.1"
+```sh
+cargo add ewf
 ```
 
 ## Features
