@@ -1,14 +1,16 @@
 # Validation Report
 
-Byte-level comparison of the `ewf` crate against **libewf** (via pyewf Python bindings) using publicly available forensic disk images.
+Full-media MD5 comparison of the `ewf` crate against **libewf** (via ewfexport/pyewf) and **The Sleuth Kit** (via img_cat) using publicly available forensic disk images.
+
+Every byte of decompressed media is hashed and compared — not sampled.
 
 ## Test Environment
 
 | Component | Version |
 |-----------|---------|
 | ewf crate | 0.1.0 |
-| libewf (ewfinfo) | 20231119 |
-| Python bindings | pyewf |
+| libewf (ewfexport) | 20231119 |
+| Sleuth Kit (img_cat) | 4.12.1 |
 | Rust | 1.88.0 |
 | Platform | macOS Darwin 24.6.0 (aarch64) |
 
@@ -18,163 +20,82 @@ Byte-level comparison of the `ewf` crate against **libewf** (via pyewf Python bi
 
 | Property | Value |
 |----------|-------|
-| Source | [The Stolen Szechuan Sauce](https://dfirmadness.com/the-stolen-szechuan-sauce/) (James Smith) via The Evidence Locker |
+| Challenge | [The Stolen Szechuan Sauce](https://dfirmadness.com/the-stolen-szechuan-sauce/) (James Smith) |
+| Catalog | [CFREDS — HackTheBox / SzechuanSauce](https://cfreds.nist.gov/all/HackTheBox/SzechuanSauce) |
+| Download | [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano) |
+| Filename | `20200918_0417_DESKTOP-SDN1RPT.E01` through `.E04` |
 | Format | EWF v1, multi-segment (E01-E04) |
 | Segments | 4 (2.0 GB + 2.0 GB + 2.0 GB + 403 MB) |
 | Media size | 16,106,127,360 bytes (15.0 GiB) |
 | Sectors/chunk | 64 |
 | Acquisition | FTK Imager, 2020-09-18 |
-| Integrity | Complete, not corrupted |
 
-**Results:**
-
-| Test | Result |
-|------|--------|
-| Opens successfully | PASS |
-| Media size matches libewf | PASS (16,106,127,360 bytes) |
-| MBR signature (0x55AA) | PASS |
-| GPT header ("EFI PART") | PASS |
-| First 4096 bytes vs libewf | PASS (0 mismatches) |
-| Last 4096 bytes vs libewf | PASS (0 mismatches) |
-| Chunk boundary crossing (1 MB offset) | PASS |
-
-**Verdict: BYTE-IDENTICAL to libewf.**
+**Full-media MD5:** `bcd3aef20406df00585341f0c743a1ce` — identical across libewf, Sleuth Kit, and ewf crate.
 
 ### 2. MaxPowers C Drive
 
 | Property | Value |
 |----------|-------|
-| Source | [MUS CTF 2018](https://theevidencelocker.github.io/) (David Cowen & Matt Seyer) via The Evidence Locker |
+| Challenge | [MUS CTF 2018](https://www.youracclaim.com/org/magnet-forensics/badge/magnet-user-summit-ctf-2018) (David Cowen & Matt Seyer) |
+| Catalog | [CFREDS — AcademicChallenges / MaxPowers](https://cfreds.nist.gov/all/AcademicChallenges/MaxPowers) |
+| Download | [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano) — hosted on Dropbox |
+| URL | `https://www.dropbox.com/scl/fo/oqal4blnfi5vj4miof355/AP223ojh3w70febB3gAsKkM/MaxPowersCDrive.E01?rlkey=ogpdttfz3xzk8005r95gedgiw&e=1&dl=1` |
+| Filename | `MaxPowersCDrive.E01` |
+| E01 file size | 31,577,797,290 bytes (29.4 GB) |
+| E01 MD5 | `BED3B3DDECE20D136A56AA653F0DE608` |
 | Format | linen 5, single segment |
-| Segments | 1 (29.4 GB expected, 25.3 GB downloaded — 86%) |
 | Media size | 53,687,091,200 bytes (50.0 GiB) |
 | Sectors/chunk | 64 |
 | Acquisition | linen 7.0.4.4 via f-response, 2018-05-05 |
-| Integrity | **Incomplete download** — E01 is 86% downloaded (25.3 of 29.4 GB). libewf reports "Is corrupted: yes" |
 
-**Results:**
-
-| Test | Result |
-|------|--------|
-| Opens successfully (truncated chain) | PASS |
-| MBR signature (0x55AA) | PASS |
-| First 4096 bytes vs libewf | PASS (0 mismatches) |
-| Sample reads at 512, 1MB, 100MB | PASS |
-| Graceful handling of missing `done` section | PASS |
-
-**Verdict: BYTE-IDENTICAL to libewf for available data. Incomplete E01 handled gracefully.**
+**Full-media MD5:** `10c1fbc9c01d969789ada1c67211b89f` — identical across libewf, Sleuth Kit, and ewf crate.
 
 ### 3. PC-MUS-001
 
 | Property | Value |
 |----------|-------|
-| Source | [MVS CTF 2023](https://www.magnetforensics.com/blog/announcing-the-mvs-2023-ctf-winners-and-a-new-ctf-challenge/) (Magnet Forensics) via The Evidence Locker |
+| Challenge | [MVS CTF 2023](https://www.magnetforensics.com/blog/announcing-the-mvs-2023-ctf-winners-and-a-new-ctf-challenge/) (Magnet Forensics) |
+| Catalog | [CFREDS — AcademicChallenges / PC-MUS-001](https://cfreds.nist.gov/all/AcademicChallenges/PC-MUS-001) |
+| Download | [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano) — hosted on Google Cloud Storage |
+| URL | `https://storage.googleapis.com/mvs-2023/PC-MUS-001.E01` |
+| Filename | `PC-MUS-001.E01` |
+| E01 file size | 52,629,766,482 bytes (49.0 GB) |
+| E01 MD5 | `8CF0C007391F4A72DDC12A570A115B46` |
 | Format | EnCase 6, single segment |
-| Segments | 1 (49 GB expected, ~43 GB downloaded at time of test) |
-| Media size | 256,060,514,304 bytes (238 GiB) |
+| Media size | 256,060,514,304 bytes (238.5 GiB) |
 | Sectors/chunk | 64 |
 | Acquisition | EnCase 20190306, 2023-01-07 |
-| Integrity | **Incomplete download** — E01 partially available. libewf reports "Is corrupted: yes" |
 | Section features | Both `table` and `table2` sections present (EnCase 6 redundancy) |
 
-**Results:**
-
-| Test | Result |
-|------|--------|
-| Opens successfully (truncated chain) | PASS |
-| MBR signature (0x55AA) | PASS |
-| First 4096 bytes vs libewf | PASS (0 mismatches) |
-| Sample reads at 512, 1MB, 100MB | PASS |
-| table/table2 deduplication | PASS |
-| Graceful handling of incomplete download | PASS |
-
-**Verdict: BYTE-IDENTICAL to libewf for available data. Handles both table types and truncation correctly.**
-
-## Bugs Found and Fixed
-
-During validation, three bugs were discovered and fixed (all with TDD):
-
-### Bug 1: Table header entry_count parsed as u64 instead of u32
-
-The EWF v1 table header layout is:
-
-```
-[0..4]   u32  entry_count
-[4..8]   [4]  padding (may be non-zero)
-[8..16]  u64  base_offset
-[16..20] [4]  padding
-[20..24] u32  checksum
-```
-
-The parser incorrectly read bytes `[0..8]` as `u64` for `entry_count`. This worked when padding was zero (Szechuan Sauce) but produced garbage entry counts when padding was non-zero, causing allocation overflow or `UnexpectedEof`.
-
-**Fix:** Read `[0..4]` as `u32`. Updated all synthetic test builders to match spec.
-
-### Bug 2: No graceful handling of truncated section chains
-
-Images without a trailing `done` section (truncated acquisitions, single-segment large files) caused `UnexpectedEof` when the section walker followed a `next` pointer past the end of the file.
-
-**Fix:** Check descriptor offset against file length before reading. Break the chain gracefully if the next descriptor would exceed the file boundary.
-
-### Bug 3: Synthetic tests wrote entry_count as u64
-
-All three synthetic E01 builder functions wrote `1u64.to_le_bytes()` for the entry count field instead of `1u32.to_le_bytes()`, matching the buggy parser rather than the spec. This masked the bug in unit tests.
-
-**Fix:** Updated all synthetic builders to write `1u32.to_le_bytes()` at `[0..4]`.
-
-## Comparison Tools
-
-| Tool | Method | Result |
-|------|--------|--------|
-| libewf (pyewf) | Byte-level first/last 4096 bytes | Identical for all 3 images |
-| ewfinfo | Metadata cross-reference | Media sizes, chunk geometry confirmed |
+**Full-media MD5:** `522df9db8289f4f8132cf47b14d20fb8` — identical across libewf, Sleuth Kit, and ewf crate.
 
 ## How to Reproduce
 
-### Prerequisites
+### Download test images
 
 ```bash
-# libewf Python bindings
-pip install pyewf
+# Szechuan Sauce (4 segments, ~6.4 GB total)
+# Download from The Evidence Locker: https://theevidencelocker.github.io/
 
-# Test images (large downloads)
-# Szechuan Sauce: https://cfreds.nist.gov/all/HackTheBox/SzechuanSauce
-# MaxPowers: https://cfreds.nist.gov/all/AcademicChallenges/MaxPowers
-# PC-MUS-001: https://cfreds.nist.gov/all/AcademicChallenges/PC-MUS-001
+# MaxPowers C Drive (single segment, 29.4 GB)
+curl -L -o MaxPowersCDrive.E01 \
+  "https://www.dropbox.com/scl/fo/oqal4blnfi5vj4miof355/AP223ojh3w70febB3gAsKkM/MaxPowersCDrive.E01?rlkey=ogpdttfz3xzk8005r95gedgiw&e=1&dl=1"
+md5 MaxPowersCDrive.E01  # expect BED3B3DDECE20D136A56AA653F0DE608
+
+# PC-MUS-001 (single segment, 49 GB)
+curl -L -o PC-MUS-001.E01 \
+  "https://storage.googleapis.com/mvs-2023/PC-MUS-001.E01"
+md5 PC-MUS-001.E01  # expect 8CF0C007391F4A72DDC12A570A115B46
 ```
 
-### Generate reference files
+### Generate reference hashes
 
 ```bash
-python3 -c "
-import pyewf
+# Full-media MD5 via Sleuth Kit
+img_cat image.E01 | md5
 
-# Szechuan Sauce
-filenames = pyewf.glob('test-data/20200918_0417_DESKTOP-SDN1RPT.E01')
-handle = pyewf.handle()
-handle.open(filenames)
-handle.seek(0)
-open('/tmp/ewf_first_4096.bin', 'wb').write(handle.read(4096))
-handle.seek(handle.get_media_size() - 4096)
-open('/tmp/ewf_last_4096.bin', 'wb').write(handle.read(4096))
-handle.close()
-
-# MaxPowers
-filenames = pyewf.glob('test-data/MaxPowersCDrive.E01')
-handle = pyewf.handle()
-handle.open(filenames)
-handle.seek(0)
-open('/tmp/maxpowers_first_4096.bin', 'wb').write(handle.read(4096))
-handle.close()
-
-# PC-MUS-001
-filenames = pyewf.glob('test-data/PC-MUS-001.E01')
-handle = pyewf.handle()
-handle.open(filenames)
-handle.seek(0)
-open('/tmp/pcmus_first_4096.bin', 'wb').write(handle.read(4096))
-handle.close()
-"
+# Full-media MD5 via libewf
+ewfexport -t - -f raw -u image.E01 2>/dev/null | md5
 ```
 
 ### Run validation tests
@@ -185,10 +106,10 @@ cargo test --tests
 
 ## Summary
 
-| Image | Source | Segments | Download | Byte-identical to libewf |
-|-------|--------|----------|----------|-------------------------|
-| Szechuan Sauce | dfirmadness.com | 4 | Complete | Yes (first + last 4096 bytes) |
-| MaxPowers | MUS CTF 2018, Dropbox | 1 | 86% (25.3/29.4 GB) | Yes (first 4096 bytes) |
-| PC-MUS-001 | MVS CTF 2023, Google Storage | 1 | ~88% (~43/49 GB) | Yes (first 4096 bytes) |
+| Image | Format | Media Size | Full-media MD5 | ewf = libewf = TSK |
+|-------|--------|------------|----------------|---------------------|
+| Szechuan Sauce | EWF v1, 4 segments | 15.0 GiB | `bcd3aef...` | Yes |
+| MaxPowers | linen 5, 1 segment | 50.0 GiB | `10c1fbc...` | Yes |
+| PC-MUS-001 | EnCase 6, 1 segment | 238.5 GiB | `522df9d...` | Yes |
 
-The `ewf` crate produces byte-identical output to libewf across all tested images, including graceful handling of truncated and incomplete E01 files.
+The `ewf` crate produces bit-identical output to both libewf and The Sleuth Kit across all 303 GiB of tested media.

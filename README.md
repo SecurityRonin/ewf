@@ -116,7 +116,7 @@ EWF stores disk data as zlib-compressed 32 KB chunks across one or more segment 
 
 ## Validation
 
-Byte-level comparison against libewf confirms identical output across 3 public forensic images (complete, truncated, and in-progress downloads). See [docs/VALIDATION.md](docs/VALIDATION.md) for full results.
+Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 3 public forensic images totaling 303 GiB. See [docs/VALIDATION.md](docs/VALIDATION.md) for results, image sources, and reproduction steps.
 
 ## Acknowledgments
 
