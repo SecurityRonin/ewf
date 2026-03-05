@@ -1,0 +1,20 @@
+[package]
+name = "ewf"
+version = "0.1.0"
+edition = "2021"
+description = "Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images"
+license = "MIT"
+repository = "https://github.com/SecurityRonin/ewf"
+authors = ["Albert Hui"]
+keywords = ["forensics", "ewf", "e01", "encase", "disk-image"]
+categories = ["parser-implementations", "filesystem"]
+
+[dependencies]
+flate2 = "1"
+lru = "0.12"
+thiserror = "2"
+log = "0.4"
+glob = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
