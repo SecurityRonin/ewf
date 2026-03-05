@@ -1,6 +1,6 @@
 [package]
 name = "ewf"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.74"
 description = "Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images"
