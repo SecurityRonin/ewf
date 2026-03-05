@@ -3,11 +3,17 @@ use std::io::{Read, Seek, SeekFrom};
 #[test]
 fn validate_pcmus() {
     let path = "../usnjrnl-forensic/test-data/PC-MUS-001.E01";
-    if !std::path::Path::new(path).exists() { return; }
+    if !std::path::Path::new(path).exists() {
+        return;
+    }
 
     let mut reader = ewf::EwfReader::open(path).unwrap();
 
-    assert_eq!(reader.total_size(), 256060514304, "Media size mismatch vs ewfinfo");
+    assert_eq!(
+        reader.total_size(),
+        256060514304,
+        "Media size mismatch vs ewfinfo"
+    );
 
     // MBR
     let mut mbr = [0u8; 512];
@@ -23,10 +29,12 @@ fn validate_pcmus() {
 /// Sleuth Kit full-media MD5: 522df9db8289f4f8132cf47b14d20fb8
 #[test]
 fn pcmus_full_media_md5() {
-    use md5::{Md5, Digest};
+    use md5::{Digest, Md5};
 
     let path = "../usnjrnl-forensic/test-data/PC-MUS-001.E01";
-    if !std::path::Path::new(path).exists() { return; }
+    if !std::path::Path::new(path).exists() {
+        return;
+    }
 
     let mut reader = ewf::EwfReader::open(path).unwrap();
     reader.seek(SeekFrom::Start(0)).unwrap();
@@ -37,16 +45,20 @@ fn pcmus_full_media_md5() {
 
     loop {
         let n = reader.read(&mut buf).unwrap();
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
         total += n as u64;
     }
 
     let hash = format!("{:x}", hasher.finalize());
-    eprintln!("PC-MUS full-media MD5: {}", hash);
-    eprintln!("Bytes hashed: {} / {}", total, reader.total_size());
+    eprintln!("PC-MUS full-media MD5: {hash}");
+    eprintln!("Bytes hashed: {total} / {}", reader.total_size());
 
     assert_eq!(total, reader.total_size(), "Did not read entire media");
-    assert_eq!(hash, "522df9db8289f4f8132cf47b14d20fb8",
-        "Full-media MD5 mismatch vs libewf/Sleuth Kit");
+    assert_eq!(
+        hash, "522df9db8289f4f8132cf47b14d20fb8",
+        "Full-media MD5 mismatch vs libewf/Sleuth Kit"
+    );
 }

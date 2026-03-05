@@ -69,6 +69,58 @@ Every byte of decompressed media is hashed and compared — not sampled.
 
 **Full-media MD5:** `522df9db8289f4f8132cf47b14d20fb8` — identical across libewf, Sleuth Kit, and ewf crate.
 
+### 4. exfat1 (DFTT)
+
+| Property | Value |
+|----------|-------|
+| Project | [Digital Forensics Tool Testing (DFTT)](http://dftt.sourceforge.net/) (Brian Carrier) |
+| Source | [Digital Corpora](https://digitalcorpora.org/) — AWS Open Data |
+| URL | `https://digitalcorpora.s3.amazonaws.com/corpora/drives/dftt-2004/exfat1.E01` |
+| Filename | `exfat1.E01` |
+| E01 file size | 274,722 bytes (268 KB) |
+| E01 MD5 | `74aca823a3959867a9de72a6b4c79b50` |
+| Format | EnCase 6, deflate best-compression |
+| Media size | 100,020,736 bytes (95 MiB) |
+| Sectors/chunk | 64 |
+| Filesystem | exFAT |
+
+**Full-media MD5:** `0777ee90c27ed5ff5868af2015bed635` — identical across libewf, Sleuth Kit, and ewf crate.
+
+### 5. imageformat_mmls_1 (DFTT)
+
+| Property | Value |
+|----------|-------|
+| Project | [Digital Forensics Tool Testing (DFTT)](http://dftt.sourceforge.net/) (Brian Carrier) |
+| Source | [Digital Corpora](https://digitalcorpora.org/) — AWS Open Data |
+| URL | `https://digitalcorpora.s3.amazonaws.com/corpora/drives/dftt-2004/imageformat_mmls_1.E01` |
+| Filename | `imageformat_mmls_1.E01` |
+| E01 file size | 414,941 bytes (405 KB) |
+| E01 MD5 | `bb6c6bec25d589e87a11af9129275cc9` |
+| Format | FTK Imager, no compression |
+| Media size | 62,915,072 bytes (60 MiB) |
+| Sectors/chunk | 64 |
+| Filesystem | NTFS (partition at offset 65536) |
+| Description | Created to test Sleuth Kit libraries |
+
+**Full-media MD5:** `8ec671e301095c258224aad701740503` — identical across libewf, Sleuth Kit, and ewf crate.
+
+### 6. nps-2010-emails (NPS)
+
+| Property | Value |
+|----------|-------|
+| Project | Naval Postgraduate School (NPS) forensic test corpora |
+| Source | [Digital Corpora](https://digitalcorpora.org/) — AWS Open Data |
+| URL | `https://digitalcorpora.s3.amazonaws.com/corpora/drives/nps-2010-emails/nps-2010-emails.E01` |
+| Filename | `nps-2010-emails.E01` |
+| E01 file size | 518,680 bytes (507 KB) |
+| E01 MD5 | `98e52ff847a440df3ba08261a3eea0f8` |
+| Format | EnCase 6, deflate best-compression |
+| Media size | 10,485,760 bytes (10 MiB) |
+| Sectors/chunk | 64 |
+| Content | 30 email addresses in various document formats |
+
+**Full-media MD5:** `7dae50cec8163697415e69fd72387c01` — identical across libewf, Sleuth Kit, and ewf crate.
+
 ## How to Reproduce
 
 ### Download test images
@@ -111,5 +163,8 @@ cargo test --tests
 | Szechuan Sauce | EWF v1, 4 segments | 15.0 GiB | `bcd3aef...` | Yes |
 | MaxPowers | linen 5, 1 segment | 50.0 GiB | `10c1fbc...` | Yes |
 | PC-MUS-001 | EnCase 6, 1 segment | 238.5 GiB | `522df9d...` | Yes |
+| exfat1 | EnCase 6, compressed | 95 MiB | `0777ee9...` | Yes |
+| imageformat_mmls_1 | FTK Imager, uncompressed | 60 MiB | `8ec671e...` | Yes |
+| nps-2010-emails | EnCase 6, compressed | 10 MiB | `7dae50c...` | Yes |
 
-The `ewf` crate produces bit-identical output to both libewf and The Sleuth Kit across all 303 GiB of tested media.
+The `ewf` crate produces bit-identical output to both libewf and The Sleuth Kit across all 6 images (303+ GiB of tested media). Images 4-6 are committed as test fixtures and run in CI.

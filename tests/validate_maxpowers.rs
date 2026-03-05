@@ -3,11 +3,17 @@ use std::io::{Read, Seek, SeekFrom};
 #[test]
 fn validate_maxpowers() {
     let path = "../usnjrnl-forensic/test-data/MaxPowersCDrive.E01";
-    if !std::path::Path::new(path).exists() { return; }
+    if !std::path::Path::new(path).exists() {
+        return;
+    }
 
     let mut reader = ewf::EwfReader::open(path).unwrap();
 
-    assert_eq!(reader.total_size(), 53687091200, "Total size must match ewfinfo");
+    assert_eq!(
+        reader.total_size(),
+        53687091200,
+        "Total size must match ewfinfo"
+    );
 
     // MBR
     let mut mbr = [0u8; 512];
@@ -27,7 +33,10 @@ fn validate_maxpowers() {
     let mut ntfs_boot = [0u8; 512];
     reader.read_exact(&mut ntfs_boot).unwrap();
     let oem_id = std::str::from_utf8(&ntfs_boot[3..11]).unwrap_or("<invalid>");
-    assert!(oem_id.starts_with("NTFS"), "NTFS boot sector must have NTFS OEM ID");
+    assert!(
+        oem_id.starts_with("NTFS"),
+        "NTFS boot sector must have NTFS OEM ID"
+    );
 }
 
 /// Full-media MD5: read every byte through EwfReader, hash it, compare against
@@ -37,10 +46,12 @@ fn validate_maxpowers() {
 /// Sleuth Kit full-media MD5: 10c1fbc9c01d969789ada1c67211b89f
 #[test]
 fn maxpowers_full_media_md5() {
-    use md5::{Md5, Digest};
+    use md5::{Digest, Md5};
 
     let path = "../usnjrnl-forensic/test-data/MaxPowersCDrive.E01";
-    if !std::path::Path::new(path).exists() { return; }
+    if !std::path::Path::new(path).exists() {
+        return;
+    }
 
     let mut reader = ewf::EwfReader::open(path).unwrap();
     reader.seek(SeekFrom::Start(0)).unwrap();
@@ -51,16 +62,20 @@ fn maxpowers_full_media_md5() {
 
     loop {
         let n = reader.read(&mut buf).unwrap();
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
         total += n as u64;
     }
 
     let hash = format!("{:x}", hasher.finalize());
-    eprintln!("MaxPowers full-media MD5: {}", hash);
-    eprintln!("Bytes hashed: {} / {}", total, reader.total_size());
+    eprintln!("MaxPowers full-media MD5: {hash}");
+    eprintln!("Bytes hashed: {total} / {}", reader.total_size());
 
     assert_eq!(total, reader.total_size(), "Did not read entire media");
-    assert_eq!(hash, "10c1fbc9c01d969789ada1c67211b89f",
-        "Full-media MD5 mismatch vs libewf/Sleuth Kit");
+    assert_eq!(
+        hash, "10c1fbc9c01d969789ada1c67211b89f",
+        "Full-media MD5 mismatch vs libewf/Sleuth Kit"
+    );
 }

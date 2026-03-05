@@ -3,11 +3,17 @@ use std::io::{Read, Seek, SeekFrom};
 #[test]
 fn validate_szechuan_sauce() {
     let path = "../usnjrnl-forensic/test-data/20200918_0417_DESKTOP-SDN1RPT.E01";
-    if !std::path::Path::new(path).exists() { return; }
+    if !std::path::Path::new(path).exists() {
+        return;
+    }
 
     let mut reader = ewf::EwfReader::open(path).unwrap();
 
-    assert_eq!(reader.total_size(), 16106127360, "Image size mismatch vs libewf");
+    assert_eq!(
+        reader.total_size(),
+        16106127360,
+        "Image size mismatch vs libewf"
+    );
 
     // MBR
     let mut mbr = [0u8; 512];
@@ -30,10 +36,12 @@ fn validate_szechuan_sauce() {
 /// Sleuth Kit full-media MD5: bcd3aef20406df00585341f0c743a1ce
 #[test]
 fn szechuan_full_media_md5() {
-    use md5::{Md5, Digest};
+    use md5::{Digest, Md5};
 
     let path = "../usnjrnl-forensic/test-data/20200918_0417_DESKTOP-SDN1RPT.E01";
-    if !std::path::Path::new(path).exists() { return; }
+    if !std::path::Path::new(path).exists() {
+        return;
+    }
 
     let mut reader = ewf::EwfReader::open(path).unwrap();
     reader.seek(SeekFrom::Start(0)).unwrap();
@@ -44,16 +52,20 @@ fn szechuan_full_media_md5() {
 
     loop {
         let n = reader.read(&mut buf).unwrap();
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
         total += n as u64;
     }
 
     let hash = format!("{:x}", hasher.finalize());
-    eprintln!("Szechuan Sauce full-media MD5: {}", hash);
-    eprintln!("Bytes hashed: {} / {}", total, reader.total_size());
+    eprintln!("Szechuan Sauce full-media MD5: {hash}");
+    eprintln!("Bytes hashed: {total} / {}", reader.total_size());
 
     assert_eq!(total, reader.total_size(), "Did not read entire media");
-    assert_eq!(hash, "bcd3aef20406df00585341f0c743a1ce",
-        "Full-media MD5 mismatch vs libewf/Sleuth Kit");
+    assert_eq!(
+        hash, "bcd3aef20406df00585341f0c743a1ce",
+        "Full-media MD5 mismatch vs libewf/Sleuth Kit"
+    );
 }

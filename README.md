@@ -90,33 +90,9 @@ let ntfs = Ntfs::new(&mut reader)?;
 | L01/Lx01 (logical) | Not yet |
 | S01 (SMART) | Not yet |
 
-## How it works
-
-EWF stores disk data as zlib-compressed 32 KB chunks across one or more segment files. Each segment contains a linked list of section descriptors pointing to volume geometry, chunk offset tables, and compressed data.
-
-```
-.E01 file layout:
-┌─────────────┐
-│ File Header  │  13 bytes: EVF signature + segment number
-├─────────────┤
-│ Section      │  76 bytes each, linked list:
-│ Descriptors  │  volume → table → sectors → done
-├─────────────┤
-│ Volume       │  Chunk geometry (sectors/chunk, bytes/sector)
-├─────────────┤
-│ Table        │  Chunk offset array (4 bytes per entry)
-├─────────────┤
-│ Sectors      │  Compressed chunk data
-├─────────────┤
-│ done         │  End of chain
-└─────────────┘
-```
-
-`EwfReader::open()` walks each segment's section chain, builds a flat `Vec<Chunk>` index, then serves `Read + Seek` by mapping any byte offset to its chunk in O(1).
-
 ## Validation
 
-Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 3 public forensic images totaling 303 GiB. See [docs/VALIDATION.md](docs/VALIDATION.md) for results, image sources, and reproduction steps.
+Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 6 public forensic images (303+ GiB of media). Three small images from [Digital Corpora](https://digitalcorpora.org/) are committed as test fixtures and run in CI. See [docs/VALIDATION.md](docs/VALIDATION.md) for results, image sources, and reproduction steps.
 
 ## Acknowledgments
 
