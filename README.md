@@ -92,7 +92,7 @@ let ntfs = Ntfs::new(&mut reader)?;
 
 ## Validation
 
-Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 6 public forensic images (303+ GiB of media). Three small images from [Digital Corpora](https://digitalcorpora.org/) are committed as test fixtures and run in CI. See [docs/VALIDATION.md](docs/VALIDATION.md) for results, image sources, and reproduction steps.
+Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 6 public forensic images (303+ GiB of media). Test images sourced from [Digital Corpora](https://digitalcorpora.org/) and [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano). Three small images are committed as test fixtures and run in CI. See [docs/VALIDATION.md](docs/VALIDATION.md) for results, image sources, and reproduction steps.
 
 ## Acknowledgments
 
