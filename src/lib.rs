@@ -1402,8 +1402,9 @@ mod tests {
     #[test]
     #[ignore]
     fn ewf_reader_opens_real_e01() {
-        let path =
-            std::path::Path::new("../usnjrnl-forensic/test-data/20200918_0417_DESKTOP-SDN1RPT.E01");
+        let path = std::path::Path::new(
+            "../usnjrnl-forensic/tests/data/20200918_0417_DESKTOP-SDN1RPT.E01",
+        );
         if !path.exists() {
             panic!("Test image not found at {}", path.display());
         }

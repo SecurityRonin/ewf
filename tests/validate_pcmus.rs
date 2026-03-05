@@ -2,7 +2,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 #[test]
 fn validate_pcmus() {
-    let path = "../usnjrnl-forensic/test-data/PC-MUS-001.E01";
+    let path = "../usnjrnl-forensic/tests/data/PC-MUS-001.E01";
     if !std::path::Path::new(path).exists() {
         return;
     }
@@ -31,7 +31,7 @@ fn validate_pcmus() {
 fn pcmus_full_media_md5() {
     use md5::{Digest, Md5};
 
-    let path = "../usnjrnl-forensic/test-data/PC-MUS-001.E01";
+    let path = "../usnjrnl-forensic/tests/data/PC-MUS-001.E01";
     if !std::path::Path::new(path).exists() {
         return;
     }

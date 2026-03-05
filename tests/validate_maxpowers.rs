@@ -2,7 +2,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 #[test]
 fn validate_maxpowers() {
-    let path = "../usnjrnl-forensic/test-data/MaxPowersCDrive.E01";
+    let path = "../usnjrnl-forensic/tests/data/MaxPowersCDrive.E01";
     if !std::path::Path::new(path).exists() {
         return;
     }
@@ -48,7 +48,7 @@ fn validate_maxpowers() {
 fn maxpowers_full_media_md5() {
     use md5::{Digest, Md5};
 
-    let path = "../usnjrnl-forensic/test-data/MaxPowersCDrive.E01";
+    let path = "../usnjrnl-forensic/tests/data/MaxPowersCDrive.E01";
     if !std::path::Path::new(path).exists() {
         return;
     }

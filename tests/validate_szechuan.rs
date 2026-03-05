@@ -2,7 +2,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 #[test]
 fn validate_szechuan_sauce() {
-    let path = "../usnjrnl-forensic/test-data/20200918_0417_DESKTOP-SDN1RPT.E01";
+    let path = "../usnjrnl-forensic/tests/data/20200918_0417_DESKTOP-SDN1RPT.E01";
     if !std::path::Path::new(path).exists() {
         return;
     }
@@ -38,7 +38,7 @@ fn validate_szechuan_sauce() {
 fn szechuan_full_media_md5() {
     use md5::{Digest, Md5};
 
-    let path = "../usnjrnl-forensic/test-data/20200918_0417_DESKTOP-SDN1RPT.E01";
+    let path = "../usnjrnl-forensic/tests/data/20200918_0417_DESKTOP-SDN1RPT.E01";
     if !std::path::Path::new(path).exists() {
         return;
     }
