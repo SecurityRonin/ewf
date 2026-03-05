@@ -1,6 +1,6 @@
 # Validation Report
 
-Full-media MD5 comparison of the `ewf` crate against **libewf** (via ewfexport/pyewf) and **The Sleuth Kit** (via img_cat) using publicly available forensic disk images.
+Full-media MD5 comparison of the `ewf` crate against [**libewf**](https://github.com/libyal/libewf) (via ewfexport/pyewf) and [**The Sleuth Kit**](https://github.com/sleuthkit/sleuthkit) (via img_cat) using publicly available forensic disk images.
 
 Every byte of decompressed media is hashed and compared — not sampled.
 
