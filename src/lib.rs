@@ -385,7 +385,19 @@ impl EwfReader {
             // This lets us prefer "table" over "table2" without losing multi-table support.
             let mut descriptors = Vec::new();
 
+            let file_len = file.seek(SeekFrom::End(0))?;
             loop {
+                // If next descriptor offset is past EOF, stop gracefully
+                // (handles truncated files and images without a trailing "done" section)
+                if desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len {
+                    log::debug!(
+                        "section chain truncated: offset {} past file end {}",
+                        desc_offset,
+                        file_len
+                    );
+                    break;
+                }
+
                 // Read section descriptor
                 file.seek(SeekFrom::Start(desc_offset))?;
                 let mut desc_buf = [0u8; SECTION_DESCRIPTOR_SIZE];
@@ -426,8 +438,9 @@ impl EwfReader {
                         let mut tbl_hdr = [0u8; 24];
                         file.read_exact(&mut tbl_hdr)?;
 
+                        // EWF v1 table header: u32 entry_count + 4 padding + u64 base_offset
                         let entry_count =
-                            u64::from_le_bytes(tbl_hdr[0..8].try_into().unwrap()) as usize;
+                            u32::from_le_bytes(tbl_hdr[0..4].try_into().unwrap()) as usize;
                         let base_offset = u64::from_le_bytes(tbl_hdr[8..16].try_into().unwrap());
 
                         // Read all table entries at once
@@ -861,9 +874,10 @@ mod tests {
         tbl_desc[24..32].copy_from_slice(&tbl_section_size.to_le_bytes());
         file_data.extend_from_slice(&tbl_desc);
 
-        // 5. Table header (24 bytes)
+        // 5. Table header (24 bytes): u32 entry_count + 4 padding + u64 base_offset
         let mut tbl_hdr = [0u8; 24];
-        tbl_hdr[0..8].copy_from_slice(&1u64.to_le_bytes()); // 1 entry
+        tbl_hdr[0..4].copy_from_slice(&1u32.to_le_bytes()); // entry_count (u32)
+        // [4..8] padding — left as zeros
         tbl_hdr[8..16].copy_from_slice(&sectors_data_offset.to_le_bytes()); // base_offset
         file_data.extend_from_slice(&tbl_hdr);
 
@@ -1018,9 +1032,9 @@ mod tests {
         tbl_desc[24..32].copy_from_slice(&tbl_section_size.to_le_bytes());
         file_data.extend_from_slice(&tbl_desc);
 
-        // Table header
+        // Table header: u32 entry_count + 4 padding + u64 base_offset
         let mut tbl_hdr = [0u8; 24];
-        tbl_hdr[0..8].copy_from_slice(&1u64.to_le_bytes());
+        tbl_hdr[0..4].copy_from_slice(&1u32.to_le_bytes()); // entry_count (u32)
         tbl_hdr[8..16].copy_from_slice(&sectors_data_offset.to_le_bytes());
         file_data.extend_from_slice(&tbl_hdr);
 
@@ -1128,9 +1142,9 @@ mod tests {
         td[24..32].copy_from_slice(&(76u64 + 24 + 4).to_le_bytes());
         d.extend_from_slice(&td);
 
-        // Table header: 1 entry, base = sec_data_off
+        // Table header: u32 entry_count + 4 padding + u64 base_offset
         let mut th = [0u8; 24];
-        th[0..8].copy_from_slice(&1u64.to_le_bytes());
+        th[0..4].copy_from_slice(&1u32.to_le_bytes()); // entry_count (u32)
         th[8..16].copy_from_slice(&sec_data_off.to_le_bytes());
         d.extend_from_slice(&th);
 
@@ -1174,6 +1188,225 @@ mod tests {
         // Volume says 1 chunk. Even though both table and table2 exist,
         // we should have exactly 1 chunk, not 2.
         assert_eq!(reader.chunk_count(), 1, "table2 caused duplicate chunks");
+    }
+
+    // -- Bug fix: table header entry_count must be u32, not u64 --
+
+    /// Build a synthetic E01 where the table header has non-zero padding
+    /// bytes at [4..8]. The EWF v1 spec defines the table header as:
+    ///   [0..4]  u32 entry_count
+    ///   [4..8]  padding (4 bytes, may be non-zero)
+    ///   [8..16] u64 base_offset
+    ///   [16..24] padding + checksum
+    /// If the parser incorrectly reads [0..8] as u64, the non-zero padding
+    /// will corrupt the entry count, causing failure.
+    fn build_synthetic_e01_with_nonzero_table_padding(data: &[u8]) -> NamedTempFile {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+
+        let chunk_size: u32 = 32768;
+        let bytes_per_sector: u32 = 512;
+        let sectors_per_chunk: u32 = chunk_size / bytes_per_sector;
+        let sector_count = (chunk_size / bytes_per_sector) as u64;
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data).unwrap();
+        // Pad to chunk_size
+        encoder
+            .write_all(&vec![0u8; chunk_size as usize - data.len()])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let vol_desc_off: u64 = FILE_HEADER_SIZE as u64;
+        let vol_data_off: u64 = vol_desc_off + SECTION_DESCRIPTOR_SIZE as u64;
+        let tbl_desc_off: u64 = vol_data_off + 94;
+        let tbl_hdr_off: u64 = tbl_desc_off + SECTION_DESCRIPTOR_SIZE as u64;
+        let tbl_entry_off: u64 = tbl_hdr_off + 24;
+        let sectors_desc_offset: u64 = tbl_entry_off + 4;
+        let sectors_data_offset: u64 = sectors_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
+        let done_desc_offset: u64 = sectors_data_offset + compressed.len() as u64;
+
+        let mut file_data = Vec::new();
+
+        // File header
+        let mut hdr = [0u8; FILE_HEADER_SIZE];
+        hdr[0..8].copy_from_slice(&EVF_SIGNATURE);
+        hdr[9..11].copy_from_slice(&1u16.to_le_bytes());
+        file_data.extend_from_slice(&hdr);
+
+        // Volume descriptor
+        let mut vol_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        vol_desc[..6].copy_from_slice(b"volume");
+        vol_desc[16..24].copy_from_slice(&tbl_desc_off.to_le_bytes());
+        let vol_section_size = SECTION_DESCRIPTOR_SIZE as u64 + 94;
+        vol_desc[24..32].copy_from_slice(&vol_section_size.to_le_bytes());
+        file_data.extend_from_slice(&vol_desc);
+
+        // Volume data
+        let mut vol_data = [0u8; 94];
+        vol_data[4..8].copy_from_slice(&1u32.to_le_bytes());
+        vol_data[8..12].copy_from_slice(&sectors_per_chunk.to_le_bytes());
+        vol_data[12..16].copy_from_slice(&bytes_per_sector.to_le_bytes());
+        vol_data[16..24].copy_from_slice(&sector_count.to_le_bytes());
+        file_data.extend_from_slice(&vol_data);
+
+        // Table descriptor
+        let mut tbl_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        tbl_desc[..5].copy_from_slice(b"table");
+        tbl_desc[16..24].copy_from_slice(&sectors_desc_offset.to_le_bytes());
+        let tbl_section_size = SECTION_DESCRIPTOR_SIZE as u64 + 24 + 4;
+        tbl_desc[24..32].copy_from_slice(&tbl_section_size.to_le_bytes());
+        file_data.extend_from_slice(&tbl_desc);
+
+        // Table header — CORRECT format with non-zero padding
+        let mut tbl_hdr = [0u8; 24];
+        tbl_hdr[0..4].copy_from_slice(&1u32.to_le_bytes()); // entry_count as u32
+        tbl_hdr[4..8].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // non-zero padding!
+        tbl_hdr[8..16].copy_from_slice(&sectors_data_offset.to_le_bytes()); // base_offset
+        file_data.extend_from_slice(&tbl_hdr);
+
+        // Table entry
+        let entry: u32 = 0x8000_0000;
+        file_data.extend_from_slice(&entry.to_le_bytes());
+
+        // Sectors descriptor
+        let mut sec_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        sec_desc[..7].copy_from_slice(b"sectors");
+        sec_desc[16..24].copy_from_slice(&done_desc_offset.to_le_bytes());
+        let sec_section_size = SECTION_DESCRIPTOR_SIZE as u64 + compressed.len() as u64;
+        sec_desc[24..32].copy_from_slice(&sec_section_size.to_le_bytes());
+        file_data.extend_from_slice(&sec_desc);
+
+        // Compressed data
+        file_data.extend_from_slice(&compressed);
+
+        // Done descriptor
+        let mut done_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        done_desc[..4].copy_from_slice(b"done");
+        file_data.extend_from_slice(&done_desc);
+
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".E01")
+            .tempfile()
+            .unwrap();
+        tmp.write_all(&file_data).unwrap();
+        tmp.flush().unwrap();
+        tmp
+    }
+
+    #[test]
+    fn ewf_reader_handles_nonzero_table_padding() {
+        let data = b"nonzero padding in table header";
+        let tmp = build_synthetic_e01_with_nonzero_table_padding(data);
+        let mut reader = EwfReader::open(tmp.path()).unwrap();
+        assert_eq!(reader.chunk_count(), 1);
+        let mut buf = vec![0u8; data.len()];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, data);
+    }
+
+    // -- Bug fix: graceful handling of truncated section chains --
+
+    /// Build a synthetic E01 where the sectors section's `next` pointer
+    /// exceeds the file size (simulating a truncated or single-segment image
+    /// without a trailing `done` section, as produced by some tools).
+    fn build_synthetic_e01_truncated_chain(data: &[u8]) -> NamedTempFile {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+
+        let chunk_size: u32 = 32768;
+        let bytes_per_sector: u32 = 512;
+        let sectors_per_chunk: u32 = chunk_size / bytes_per_sector;
+        let sector_count = (chunk_size / bytes_per_sector) as u64;
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder
+            .write_all(&vec![0u8; chunk_size as usize - data.len()])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let vol_desc_off: u64 = FILE_HEADER_SIZE as u64;
+        let vol_data_off: u64 = vol_desc_off + SECTION_DESCRIPTOR_SIZE as u64;
+        let tbl_desc_off: u64 = vol_data_off + 94;
+        let tbl_hdr_off: u64 = tbl_desc_off + SECTION_DESCRIPTOR_SIZE as u64;
+        let tbl_entry_off: u64 = tbl_hdr_off + 24;
+        let sectors_desc_offset: u64 = tbl_entry_off + 4;
+        let sectors_data_offset: u64 = sectors_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
+
+        let mut file_data = Vec::new();
+
+        // File header
+        let mut hdr = [0u8; FILE_HEADER_SIZE];
+        hdr[0..8].copy_from_slice(&EVF_SIGNATURE);
+        hdr[9..11].copy_from_slice(&1u16.to_le_bytes());
+        file_data.extend_from_slice(&hdr);
+
+        // Volume descriptor
+        let mut vol_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        vol_desc[..6].copy_from_slice(b"volume");
+        vol_desc[16..24].copy_from_slice(&tbl_desc_off.to_le_bytes());
+        let vol_section_size = SECTION_DESCRIPTOR_SIZE as u64 + 94;
+        vol_desc[24..32].copy_from_slice(&vol_section_size.to_le_bytes());
+        file_data.extend_from_slice(&vol_desc);
+
+        // Volume data
+        let mut vol_data = [0u8; 94];
+        vol_data[4..8].copy_from_slice(&1u32.to_le_bytes());
+        vol_data[8..12].copy_from_slice(&sectors_per_chunk.to_le_bytes());
+        vol_data[12..16].copy_from_slice(&bytes_per_sector.to_le_bytes());
+        vol_data[16..24].copy_from_slice(&sector_count.to_le_bytes());
+        file_data.extend_from_slice(&vol_data);
+
+        // Table descriptor
+        let mut tbl_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        tbl_desc[..5].copy_from_slice(b"table");
+        tbl_desc[16..24].copy_from_slice(&sectors_desc_offset.to_le_bytes());
+        let tbl_section_size = SECTION_DESCRIPTOR_SIZE as u64 + 24 + 4;
+        tbl_desc[24..32].copy_from_slice(&tbl_section_size.to_le_bytes());
+        file_data.extend_from_slice(&tbl_desc);
+
+        // Table header (correct u32 format)
+        let mut tbl_hdr = [0u8; 24];
+        tbl_hdr[0..4].copy_from_slice(&1u32.to_le_bytes());
+        tbl_hdr[8..16].copy_from_slice(&sectors_data_offset.to_le_bytes());
+        file_data.extend_from_slice(&tbl_hdr);
+
+        // Table entry
+        let entry: u32 = 0x8000_0000;
+        file_data.extend_from_slice(&entry.to_le_bytes());
+
+        // Sectors descriptor — next pointer deliberately past EOF!
+        let mut sec_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        sec_desc[..7].copy_from_slice(b"sectors");
+        let bogus_next: u64 = 999_999_999; // way past file end
+        sec_desc[16..24].copy_from_slice(&bogus_next.to_le_bytes());
+        let sec_section_size = SECTION_DESCRIPTOR_SIZE as u64 + compressed.len() as u64;
+        sec_desc[24..32].copy_from_slice(&sec_section_size.to_le_bytes());
+        file_data.extend_from_slice(&sec_desc);
+
+        // Compressed data — NO done section after this!
+        file_data.extend_from_slice(&compressed);
+
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".E01")
+            .tempfile()
+            .unwrap();
+        tmp.write_all(&file_data).unwrap();
+        tmp.flush().unwrap();
+        tmp
+    }
+
+    #[test]
+    fn ewf_reader_handles_truncated_section_chain() {
+        let data = b"truncated chain test data!!!";
+        let tmp = build_synthetic_e01_truncated_chain(data);
+        // Should open successfully despite missing done section
+        let mut reader = EwfReader::open(tmp.path()).unwrap();
+        assert_eq!(reader.chunk_count(), 1);
+        let mut buf = vec![0u8; data.len()];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, data);
     }
 
     // -- Enhancement: configurable LRU cache size --

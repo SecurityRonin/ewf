@@ -114,6 +114,10 @@ EWF stores disk data as zlib-compressed 32 KB chunks across one or more segment 
 
 `EwfReader::open()` walks each segment's section chain, builds a flat `Vec<Chunk>` index, then serves `Read + Seek` by mapping any byte offset to its chunk in O(1).
 
+## Validation
+
+Byte-level comparison against libewf confirms identical output across 3 public forensic images (complete, truncated, and in-progress downloads). See [docs/VALIDATION.md](docs/VALIDATION.md) for full results.
+
 ## Acknowledgments
 
 Architecture informed by [Velocidex/go-ewf](https://github.com/Velocidex/go-ewf) (Apache-2.0).
