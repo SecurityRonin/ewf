@@ -389,10 +389,9 @@ impl EwfReader {
             loop {
                 // If next descriptor offset is past EOF, stop gracefully
                 // (handles truncated files and images without a trailing "done" section)
-                if desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len {
-                    log::debug!(
-                        "section chain truncated: offset {desc_offset} past file end {file_len}"
-                    );
+                let past_eof = desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len;
+                if past_eof {
+                    log::debug!("truncated chain at {desc_offset}, EOF {file_len}");
                     break;
                 }
 
@@ -526,11 +525,8 @@ impl EwfReader {
 
         let mut page = vec![0u8; self.chunk_size as usize];
 
-        if chunk_id >= self.chunks.len() {
-            // Out of range: return zero-filled
-            return Ok(page);
-        }
-
+        // chunk_id is always in range: read_at() guards against out-of-range offsets
+        // before calling read_chunk(), so this index is safe.
         let chunk = self.chunks[chunk_id].clone();
         let file = &mut self.segments[chunk.segment_idx];
 
@@ -545,11 +541,11 @@ impl EwfReader {
             file.seek(SeekFrom::Start(chunk.offset))?;
             let mut total_read = 0;
             while total_read < compressed.len() {
-                match file.read(&mut compressed[total_read..]) {
-                    Ok(0) => break,
-                    Ok(n) => total_read += n,
-                    Err(e) => return Err(EwfError::Io(e)),
+                let n = file.read(&mut compressed[total_read..])?;
+                if n == 0 {
+                    break;
                 }
+                total_read += n;
             }
             let compressed = &compressed[..total_read];
 
@@ -1820,14 +1816,12 @@ mod tests {
     }
 
     #[test]
-    fn ewf_reader_read_past_end_returns_zero_filled() {
-        // Seek beyond last chunk to trigger out-of-range zero-fill path
+    fn ewf_reader_read_at_eof_returns_zero() {
         let data = b"edge case";
         let tmp = build_synthetic_e01(data);
         let mut reader = EwfReader::open(tmp.path()).unwrap();
 
-        // total_size is 32768 (one chunk). Reading chunk_id >= chunks.len() returns zero-fill.
-        // Seek to exactly total_size - should read 0 bytes (EOF)
+        // Seek to exactly total_size, read should return 0 (EOF)
         reader.seek(SeekFrom::Start(reader.total_size())).unwrap();
         let mut buf = [0u8; 16];
         let n = reader.read(&mut buf).unwrap();
