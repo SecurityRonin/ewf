@@ -123,7 +123,11 @@ Every byte of decompressed media is hashed and compared — not sampled.
 
 ## How to Reproduce
 
-### Download test images
+### Test fixtures (images 4-6)
+
+Images 4-6 are committed in `tests/data/` and run automatically via `cargo test`.
+
+### Download large images (images 1-3)
 
 ```bash
 # Szechuan Sauce (4 segments, ~6.4 GB total)
