@@ -4,6 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/ewf)](https://docs.rs/ewf)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/SecurityRonin/ewf/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/ewf/actions)
+[![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
 
 Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images. Zero GPL dependencies.
 
