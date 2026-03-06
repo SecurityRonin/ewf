@@ -103,8 +103,3 @@ Architecture informed by [Velocidex/go-ewf](https://github.com/Velocidex/go-ewf)
 
 MIT
 
-## Sponsor
-
-If this crate is useful to your DFIR work:
-
-[![Sponsor](https://img.shields.io/badge/sponsor-♥-ea4aaa)](https://github.com/sponsors/h4x0r)
