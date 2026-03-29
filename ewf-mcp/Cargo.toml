@@ -1,0 +1,16 @@
+[package]
+name = "ewf-mcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "MCP server for EWF forensic disk image inspection"
+license = "MIT"
+repository = "https://github.com/SecurityRonin/ewf"
+authors = ["Albert Hui"]
+publish = false
+
+[dependencies]
+ewf = { path = "../ewf" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
