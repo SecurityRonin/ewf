@@ -90,6 +90,10 @@ fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
 /// Maximum section data size we'll read into memory (DoS guard).
 const MAX_SECTION_DATA_SIZE: u64 = 1_000_000;
 
+/// Maximum table entries we'll allocate for (DoS guard).
+/// 4M entries × 32 KB chunks = 128 TB image — far beyond any real forensic image.
+const MAX_TABLE_ENTRIES: usize = 4_000_000;
+
 /// Default EWF2 chunk size when device_info is absent or unparseable.
 const DEFAULT_V2_CHUNK_SIZE: u64 = 32768;
 
@@ -294,6 +298,11 @@ impl EwfReader {
                         // EWF v1 table header: u32 entry_count + 4 padding + u64 base_offset
                         let entry_count =
                             u32::from_le_bytes(tbl_hdr[0..4].try_into().unwrap()) as usize;
+                        if entry_count > MAX_TABLE_ENTRIES {
+                            return Err(EwfError::Parse(format!(
+                                "table entry count {entry_count} exceeds maximum {MAX_TABLE_ENTRIES}"
+                            )));
+                        }
                         let base_offset = u64::from_le_bytes(tbl_hdr[8..16].try_into().unwrap());
 
                         // Read all table entries at once
@@ -481,6 +490,11 @@ impl EwfReader {
                         let tbl_hdr = ewf2::Ewf2TableHeader::parse(&tbl_hdr_buf)?;
 
                         let entry_count = tbl_hdr.entry_count as usize;
+                        if entry_count > MAX_TABLE_ENTRIES {
+                            return Err(EwfError::Parse(format!(
+                                "table entry count {entry_count} exceeds maximum {MAX_TABLE_ENTRIES}"
+                            )));
+                        }
                         let entries_offset = data_offset + 20;
                         file.seek(SeekFrom::Start(entries_offset))?;
                         let mut entries_buf = vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];

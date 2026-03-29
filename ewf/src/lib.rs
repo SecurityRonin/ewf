@@ -2200,4 +2200,116 @@ mod tests {
             "Should reject duplicate segment numbers: {:?}", result
         );
     }
+
+    // -- DoS guard: reject absurd table entry_count --
+
+    #[test]
+    fn v1_rejects_absurd_table_entry_count() {
+        // Build a synthetic E01 with entry_count = 0x1000_0000 (268M entries).
+        // Without a guard, this would try to allocate 1 GB. Reader should reject it.
+        let chunk_size: u32 = 32768;
+        let sectors_per_chunk: u32 = 64;
+        let bytes_per_sector: u32 = 512;
+        let sector_count: u64 = (chunk_size / bytes_per_sector) as u64;
+
+        let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64;
+        let vol_data_offset: u64 = vol_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
+        let tbl_desc_offset: u64 = vol_data_offset + 94;
+        let tbl_hdr_offset: u64 = tbl_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
+        let done_desc_offset: u64 = tbl_hdr_offset + 24 + 4; // 24 header + 4 bytes (1 fake entry)
+
+        let mut file_data = Vec::new();
+
+        // File header
+        file_data.extend_from_slice(&EVF_SIGNATURE);
+        file_data.push(0x01);
+        file_data.extend_from_slice(&1u16.to_le_bytes());
+        file_data.extend_from_slice(&0u16.to_le_bytes());
+
+        // Volume descriptor
+        let mut vol_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        vol_desc[..6].copy_from_slice(b"volume");
+        vol_desc[16..24].copy_from_slice(&tbl_desc_offset.to_le_bytes());
+        vol_desc[24..32].copy_from_slice(&(SECTION_DESCRIPTOR_SIZE as u64 + 94).to_le_bytes());
+        file_data.extend_from_slice(&vol_desc);
+
+        // Volume data
+        let mut vol_data = [0u8; 94];
+        vol_data[0..4].copy_from_slice(&1u32.to_le_bytes());
+        vol_data[4..8].copy_from_slice(&1u32.to_le_bytes());
+        vol_data[8..12].copy_from_slice(&sectors_per_chunk.to_le_bytes());
+        vol_data[12..16].copy_from_slice(&bytes_per_sector.to_le_bytes());
+        vol_data[16..24].copy_from_slice(&sector_count.to_le_bytes());
+        file_data.extend_from_slice(&vol_data);
+
+        // Table descriptor
+        let mut tbl_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        tbl_desc[..5].copy_from_slice(b"table");
+        tbl_desc[16..24].copy_from_slice(&done_desc_offset.to_le_bytes());
+        let tbl_section_size = SECTION_DESCRIPTOR_SIZE as u64 + 24 + 4;
+        tbl_desc[24..32].copy_from_slice(&tbl_section_size.to_le_bytes());
+        file_data.extend_from_slice(&tbl_desc);
+
+        // Table header with ABSURD entry_count
+        let mut tbl_hdr = [0u8; 24];
+        tbl_hdr[0..4].copy_from_slice(&0x1000_0000u32.to_le_bytes()); // 268M entries!
+        tbl_hdr[8..16].copy_from_slice(&0u64.to_le_bytes());
+        file_data.extend_from_slice(&tbl_hdr);
+
+        // One fake table entry (the file is way too small for 268M)
+        file_data.extend_from_slice(&0u32.to_le_bytes());
+
+        // Done
+        let mut done_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
+        done_desc[..4].copy_from_slice(b"done");
+        done_desc[24..32].copy_from_slice(&(SECTION_DESCRIPTOR_SIZE as u64).to_le_bytes());
+        file_data.extend_from_slice(&done_desc);
+
+        let mut tmp = tempfile::Builder::new().suffix(".E01").tempfile().unwrap();
+        tmp.write_all(&file_data).unwrap();
+        tmp.flush().unwrap();
+
+        let result = EwfReader::open(tmp.path());
+        assert!(result.is_err(), "Should reject absurd entry_count, got: {:?}", result.ok().map(|r| r.chunk_count()));
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("entry count"), "Error should mention entry count: {err_msg}");
+    }
+
+    #[test]
+    fn v2_rejects_absurd_table_entry_count() {
+        // Build a minimal Ex01 with absurd sector_table entry count.
+        let mut d = Vec::new();
+        // V2 file header (32 bytes)
+        d.extend_from_slice(&ewf2::EVF2_SIGNATURE);
+        d.push(2); d.push(1); // major, minor
+        d.extend_from_slice(&1u16.to_le_bytes()); // compression = zlib
+        d.extend_from_slice(&1u32.to_le_bytes()); // segment 1
+        d.extend_from_slice(&[0u8; 16]); // set_identifier
+
+        // SectorTable section descriptor (64 bytes)
+        let mut sec = [0u8; 64];
+        sec[0..4].copy_from_slice(&0x04u32.to_le_bytes()); // SectorTable type
+        // data_size: just enough to hold table header (20 bytes) + 1 entry (16 bytes)
+        sec[16..24].copy_from_slice(&36u64.to_le_bytes());
+        sec[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
+        d.extend_from_slice(&sec);
+
+        // Table header (20 bytes) with absurd entry_count
+        let mut tbl_hdr = [0u8; 20];
+        tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk
+        tbl_hdr[8..12].copy_from_slice(&0x1000_0000u32.to_le_bytes()); // 268M entries!
+        d.extend_from_slice(&tbl_hdr);
+
+        // One fake entry (16 bytes)
+        d.extend_from_slice(&[0u8; 16]);
+
+        let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
+        tmp.write_all(&d).unwrap();
+        tmp.flush().unwrap();
+
+        let result = EwfReader::open(tmp.path());
+        assert!(result.is_err(), "Should reject absurd v2 entry_count, got: {:?}", result.ok().map(|r| r.chunk_count()));
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("entry count"), "Error should mention entry count: {err_msg}");
+    }
 }
