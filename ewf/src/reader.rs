@@ -469,7 +469,7 @@ impl EwfReader {
         let mut chunks: Vec<Chunk> = Vec::new();
         let mut stored_md5: Option<[u8; 16]> = None;
         let mut stored_sha1: Option<[u8; 20]> = None;
-        let metadata = EwfMetadata::default();
+        let mut metadata = EwfMetadata::default();
         let acquisition_errors: Vec<AcquisitionError> = Vec::new();
 
         for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
@@ -492,6 +492,19 @@ impl EwfReader {
                 }
 
                 match desc.section_type {
+                    ewf2::Ewf2SectionType::CaseData => {
+                        // Parse case metadata (UTF-16LE tab-separated)
+                        if desc.data_size > 0 && desc.data_size < MAX_SECTION_DATA_SIZE
+                            && metadata.case_number.is_none()
+                        {
+                            let data_offset = desc_offset + desc.descriptor_size as u64;
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut raw = vec![0u8; desc.data_size as usize];
+                            file.read_exact(&mut raw)?;
+                            parse_ewf2_case_data(&raw, &mut metadata);
+                            log::debug!("parsed v2 case_data: case={:?}", metadata.case_number);
+                        }
+                    }
                     ewf2::Ewf2SectionType::DeviceInfo => {
                         // Parse device_info for media geometry
                         if desc.data_size > 0 && desc.data_size < MAX_SECTION_DATA_SIZE && chunk_size == 0 {
@@ -876,6 +889,51 @@ pub(crate) fn parse_ewf2_device_info(raw: &[u8], chunk_size: &mut u64, total_siz
     }
     if total_sectors > 0 && bytes_per_sector > 0 {
         *total_size = bytes_per_sector * total_sectors;
+    }
+}
+
+/// Parse EWF2 case_data section (UTF-16LE tab-separated) to extract case metadata.
+///
+/// Field codes: `cn`=case_number, `en`=evidence_number, `ex`=examiner,
+/// `de`=description, `nt`=notes, `av`=acquiry_software, `ov`=os_version,
+/// `ad`=acquiry_date, `sd`=system_date.
+pub(crate) fn parse_ewf2_case_data(raw: &[u8], metadata: &mut EwfMetadata) {
+    if raw.len() < 2 {
+        return;
+    }
+    let u16_iter = raw
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+    let text: String = char::decode_utf16(u16_iter)
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 4 {
+        return;
+    }
+
+    let names: Vec<&str> = lines[2].split('\t').collect();
+    let values: Vec<&str> = lines[3].split('\t').collect();
+
+    for (i, &name) in names.iter().enumerate() {
+        if let Some(&val) = values.get(i) {
+            if val.is_empty() {
+                continue;
+            }
+            match name {
+                "cn" => metadata.case_number = Some(val.to_string()),
+                "en" => metadata.evidence_number = Some(val.to_string()),
+                "ex" => metadata.examiner = Some(val.to_string()),
+                "de" => metadata.description = Some(val.to_string()),
+                "nt" => metadata.notes = Some(val.to_string()),
+                "av" => metadata.acquiry_software = Some(val.to_string()),
+                "ov" => metadata.os_version = Some(val.to_string()),
+                "ad" => metadata.acquiry_date = Some(val.to_string()),
+                "sd" => metadata.system_date = Some(val.to_string()),
+                _ => {}
+            }
+        }
     }
 }
 

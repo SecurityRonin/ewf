@@ -1929,6 +1929,95 @@ mod tests {
         assert_eq!(hashes.sha1, Some(expected_sha1), "V2 SHA-1 should be parsed");
     }
 
+    // -- V2 CaseData metadata parsing --
+
+    fn build_synthetic_ex01_with_case_data() -> NamedTempFile {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+
+        let chunk_size: u32 = 32768;
+        let mut padded = b"case data test".to_vec();
+        padded.resize(chunk_size as usize, 0);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&padded).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // CaseData: UTF-16LE tab-separated, same format as device_info
+        let case_text = "2\nmain\ncn\ten\tex\tde\tnt\tav\tov\tad\tsd\nCASE-42\tEV-7\tJane Doe\tTest image\tForensic notes\tEnCase 8.0\tWindows 11\t2025-01-15\t2025-01-14\n";
+        let case_utf16: Vec<u8> = case_text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+
+        fn make_v2_desc(section_type: u32, data_size: u64, prev: u64) -> [u8; 64] {
+            let mut d = [0u8; 64];
+            d[0..4].copy_from_slice(&section_type.to_le_bytes());
+            d[8..16].copy_from_slice(&prev.to_le_bytes());
+            d[16..24].copy_from_slice(&data_size.to_le_bytes());
+            d[24..28].copy_from_slice(&64u32.to_le_bytes());
+            d
+        }
+
+        // Layout: header(32) + case_data(64+N) + sector_table(64+36) + sectors(64+C) + done(64)
+        let case_off = 32usize;
+        let case_data_size = case_utf16.len();
+        let tbl_off = case_off + 64 + case_data_size;
+        let tbl_data = 20 + 16;
+        let sec_off = tbl_off + 64 + tbl_data;
+        let sec_data_off = sec_off + 64;
+        let done_off = sec_data_off + compressed.len();
+
+        let mut f = Vec::new();
+
+        // Header
+        f.extend_from_slice(&ewf2::EVF2_SIGNATURE);
+        f.push(2); f.push(1);
+        f.extend_from_slice(&1u16.to_le_bytes());
+        f.extend_from_slice(&1u32.to_le_bytes());
+        f.extend_from_slice(&[0u8; 16]);
+
+        // CaseData (0x02)
+        f.extend_from_slice(&make_v2_desc(0x02, case_data_size as u64, 0));
+        f.extend_from_slice(&case_utf16);
+
+        // SectorTable (0x04)
+        f.extend_from_slice(&make_v2_desc(0x04, tbl_data as u64, case_off as u64));
+        let mut tbl_hdr = [0u8; 20];
+        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes());
+        f.extend_from_slice(&tbl_hdr);
+        let mut entry = [0u8; 16];
+        entry[0..8].copy_from_slice(&(sec_data_off as u64).to_le_bytes());
+        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
+        f.extend_from_slice(&entry);
+
+        // SectorData (0x03)
+        f.extend_from_slice(&make_v2_desc(0x03, compressed.len() as u64, tbl_off as u64));
+        f.extend_from_slice(&compressed);
+
+        // Done (0x0F)
+        f.extend_from_slice(&make_v2_desc(0x0F, 0, sec_off as u64));
+        assert_eq!(f.len(), done_off + 64);
+
+        let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
+        tmp.write_all(&f).unwrap();
+        tmp.flush().unwrap();
+        tmp
+    }
+
+    #[test]
+    fn ewf2_reader_parses_case_data_metadata() {
+        let tmp = build_synthetic_ex01_with_case_data();
+        let reader = EwfReader::open(tmp.path()).unwrap();
+        let meta = reader.metadata();
+        assert_eq!(meta.case_number.as_deref(), Some("CASE-42"));
+        assert_eq!(meta.evidence_number.as_deref(), Some("EV-7"));
+        assert_eq!(meta.examiner.as_deref(), Some("Jane Doe"));
+        assert_eq!(meta.description.as_deref(), Some("Test image"));
+        assert_eq!(meta.notes.as_deref(), Some("Forensic notes"));
+        assert_eq!(meta.acquiry_software.as_deref(), Some("EnCase 8.0"));
+        assert_eq!(meta.os_version.as_deref(), Some("Windows 11"));
+        assert_eq!(meta.acquiry_date.as_deref(), Some("2025-01-15"));
+        assert_eq!(meta.system_date.as_deref(), Some("2025-01-14"));
+    }
+
     // -- EWF2 reader coverage: Debug impl --
 
     #[test]
