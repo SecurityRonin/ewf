@@ -11,7 +11,6 @@ use crate::sections::{
     Chunk, EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry, DEFAULT_LRU_SIZE,
     FILE_HEADER_SIZE, SECTION_DESCRIPTOR_SIZE,
 };
-use crate::EVF_SIGNATURE;
 use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
 #[cfg(feature = "verify")]
 use crate::types::VerifyResult;

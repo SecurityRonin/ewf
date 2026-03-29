@@ -114,6 +114,7 @@ name = "ewf-mcp"
 version = "0.1.0"
 dependencies = [
  "ewf",
+ "glob",
  "serde",
  "serde_json",
 ]
