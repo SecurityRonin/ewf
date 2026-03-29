@@ -1,0 +1,590 @@
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+
+use flate2::read::ZlibDecoder;
+use lru::LruCache;
+
+use crate::error::{EwfError, Result};
+use crate::parse::{parse_error2_data, parse_header_text};
+use crate::sections::{
+    Chunk, EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry, DEFAULT_LRU_SIZE,
+    FILE_HEADER_SIZE, SECTION_DESCRIPTOR_SIZE,
+};
+use crate::EVF_SIGNATURE;
+use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
+#[cfg(feature = "verify")]
+use crate::types::VerifyResult;
+
+// ---------------------------------------------------------------------------
+// Segment file discovery
+// ---------------------------------------------------------------------------
+
+/// Discover all segment files for an E01 image.
+///
+/// Given `image.E01`, finds `image.E02`, ..., `image.E99`, `image.EAA`, ..., `image.EZZ`.
+/// Returns paths sorted by expected segment order.
+fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
+    let stem = first
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| EwfError::NoSegments(first.display().to_string()))?;
+    let parent = first.parent().unwrap_or_else(|| Path::new("."));
+
+    // Glob for segment extensions: .E01-.E99, .EAA-.EZZ (and lowercase)
+    // We use two patterns to match numeric (.E01) and alpha (.EAA) extensions
+    let escaped_stem = glob::Pattern::escape(stem);
+    let parent_str = parent.display();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for pattern in &[
+        format!("{parent_str}/{escaped_stem}.[Ee][0-9][0-9]"),
+        format!("{parent_str}/{escaped_stem}.[Ee][A-Za-z][A-Za-z]"),
+    ] {
+        if let Ok(entries) = glob::glob(pattern) {
+            paths.extend(entries.filter_map(|r| r.ok()));
+        }
+    }
+
+    if paths.is_empty() {
+        return Err(EwfError::NoSegments(first.display().to_string()));
+    }
+
+    // Sort by extension to get natural segment order (E01 < E02 < ... < E99 < EAA < ... < EZZ)
+    paths.sort_by(|a, b| {
+        let ext_a = a.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_b = b.extension().and_then(|e| e.to_str()).unwrap_or("");
+        ext_a.to_ascii_uppercase().cmp(&ext_b.to_ascii_uppercase())
+    });
+
+    Ok(paths)
+}
+
+// ---------------------------------------------------------------------------
+// EwfReader - main public API
+// ---------------------------------------------------------------------------
+
+/// A reader for Expert Witness Format (E01/EWF) forensic disk images.
+///
+/// Implements `Read` and `Seek` over the logical disk image stored across
+/// one or more `.E01`/`.E02`/... segment files.
+///
+/// # Example
+/// ```no_run
+/// use std::io::Read;
+/// let mut reader = ewf::EwfReader::open("disk.E01").unwrap();
+/// let mut buf = [0u8; 512];
+/// reader.read_exact(&mut buf).unwrap(); // read first sector
+/// ```
+pub struct EwfReader {
+    // Note: LruCache does not implement Debug, so we cannot derive Debug.
+    // We provide a manual impl below.
+    /// Opened segment file handles.
+    segments: Vec<File>,
+    /// Flat chunk table: chunk[i] covers logical bytes [i*chunk_size, (i+1)*chunk_size).
+    chunks: Vec<Chunk>,
+    /// Chunk size in bytes (typically 32 KB).
+    chunk_size: u64,
+    /// Total logical image size in bytes.
+    total_size: u64,
+    /// Current read position (for Read + Seek).
+    position: u64,
+    /// LRU cache: chunk_id -> decompressed chunk data.
+    cache: LruCache<usize, Vec<u8>>,
+    /// MD5 from hash/digest section (16 bytes), if present.
+    stored_md5: Option<[u8; 16]>,
+    /// SHA-1 from digest section (20 bytes), if present.
+    stored_sha1: Option<[u8; 20]>,
+    /// Case and acquisition metadata from header sections.
+    metadata: EwfMetadata,
+    /// Sectors with read errors during acquisition (from error2 section).
+    acquisition_errors: Vec<AcquisitionError>,
+}
+
+impl EwfReader {
+    /// Open an EWF image from a path to the first segment file (e.g. `image.E01`).
+    ///
+    /// Automatically discovers and opens all additional segment files.
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let paths = discover_segments(path.as_ref())?;
+        Self::open_segments(&paths)
+    }
+
+    /// Open an EWF image with a custom LRU cache size.
+    ///
+    /// `cache_size` is the number of decompressed chunks to keep in memory.
+    /// Each chunk is typically 32 KB, so 100 chunks ≈ 3.2 MB, 1000 ≈ 32 MB.
+    pub fn open_with_cache_size<P: AsRef<Path>>(path: P, cache_size: usize) -> Result<Self> {
+        let paths = discover_segments(path.as_ref())?;
+        Self::open_segments_with_cache_size(&paths, cache_size)
+    }
+
+    /// Open an EWF image from explicit segment file paths (must be in order).
+    pub fn open_segments(paths: &[PathBuf]) -> Result<Self> {
+        Self::open_segments_with_cache_size(paths, DEFAULT_LRU_SIZE)
+    }
+
+    /// Open from explicit segment paths with a custom LRU cache size.
+    pub fn open_segments_with_cache_size(paths: &[PathBuf], cache_size: usize) -> Result<Self> {
+        if paths.is_empty() {
+            return Err(EwfError::NoSegments("empty path list".into()));
+        }
+
+        // Open all segment files
+        let mut segments = Vec::with_capacity(paths.len());
+        let mut headers = Vec::with_capacity(paths.len());
+        for path in paths {
+            let mut f = File::open(path)?;
+            let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
+            f.read_exact(&mut hdr_buf)?;
+            headers.push(EwfFileHeader::parse(&hdr_buf)?);
+            segments.push(f);
+        }
+
+        // Sort by segment number, validate sequential
+        let mut indexed: Vec<(usize, u16)> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (i, h.segment_number))
+            .collect();
+        indexed.sort_by_key(|&(_, seg)| seg);
+
+        let order: Vec<usize> = indexed.iter().map(|&(i, _)| i).collect();
+
+        // Validate sequential segment numbers (1, 2, 3, ...)
+        for (expected_pos, &(_, seg_num)) in indexed.iter().enumerate() {
+            let expected = (expected_pos + 1) as u16;
+            if seg_num != expected {
+                return Err(EwfError::SegmentGap {
+                    expected,
+                    got: seg_num,
+                });
+            }
+        }
+
+        // Reorder the file handles
+        let mut final_segments: Vec<Option<File>> = segments.into_iter().map(Some).collect();
+        let mut ordered_segments = Vec::with_capacity(final_segments.len());
+        for &idx in &order {
+            ordered_segments.push(final_segments[idx].take().unwrap());
+        }
+
+        // Walk section descriptors in each segment to find volume, table, hash, and digest sections
+        let mut chunk_size: u64 = 0;
+        let mut total_size: u64 = 0;
+        let mut chunks: Vec<Chunk> = Vec::new();
+        let mut stored_md5: Option<[u8; 16]> = None;
+        let mut stored_sha1: Option<[u8; 20]> = None;
+        let mut metadata = EwfMetadata::default();
+        let mut acquisition_errors: Vec<AcquisitionError> = Vec::new();
+
+        for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
+            // First section descriptor starts at offset 13 (right after file header)
+            let mut desc_offset: u64 = FILE_HEADER_SIZE as u64;
+            // Collect section descriptors for this segment, then process.
+            // This lets us prefer "table" over "table2" without losing multi-table support.
+            let mut descriptors = Vec::new();
+
+            let file_len = file.seek(SeekFrom::End(0))?;
+            loop {
+                // If next descriptor offset is past EOF, stop gracefully
+                // (handles truncated files and images without a trailing "done" section)
+                let past_eof = desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len;
+                if past_eof {
+                    log::debug!("truncated chain at {desc_offset}, EOF {file_len}");
+                    break;
+                }
+
+                // Read section descriptor
+                file.seek(SeekFrom::Start(desc_offset))?;
+                let mut desc_buf = [0u8; SECTION_DESCRIPTOR_SIZE];
+                file.read_exact(&mut desc_buf)?;
+                let desc = SectionDescriptor::parse(&desc_buf, desc_offset)?;
+                let next = desc.next;
+                descriptors.push(desc);
+
+                if next == 0 || next <= desc_offset {
+                    break;
+                }
+                desc_offset = next;
+            }
+
+            // Determine which table type to use: prefer "table", fall back to "table2"
+            let has_table = descriptors.iter().any(|d| d.section_type == "table");
+            let table_type = if has_table { "table" } else { "table2" };
+
+            for desc in &descriptors {
+                match desc.section_type.as_str() {
+                    "volume" | "disk" => {
+                        // Read volume data right after the descriptor
+                        let mut vol_buf = [0u8; 94];
+                        file.seek(SeekFrom::Start(
+                            desc.offset + SECTION_DESCRIPTOR_SIZE as u64,
+                        ))?;
+                        file.read_exact(&mut vol_buf)?;
+                        let vol = EwfVolume::parse(&vol_buf)?;
+                        chunk_size = vol.chunk_size();
+                        total_size = vol.total_size();
+                        if total_size == 0 {
+                            total_size = chunk_size * vol.chunk_count as u64;
+                        }
+                        chunks.reserve(vol.chunk_count as usize);
+                    }
+                    t if t == table_type => {
+                        // Read table header (24 bytes after descriptor)
+                        let desc_offset = desc.offset;
+                        file.seek(SeekFrom::Start(
+                            desc_offset + SECTION_DESCRIPTOR_SIZE as u64,
+                        ))?;
+                        let mut tbl_hdr = [0u8; 24];
+                        file.read_exact(&mut tbl_hdr)?;
+
+                        // EWF v1 table header: u32 entry_count + 4 padding + u64 base_offset
+                        let entry_count =
+                            u32::from_le_bytes(tbl_hdr[0..4].try_into().unwrap()) as usize;
+                        let base_offset = u64::from_le_bytes(tbl_hdr[8..16].try_into().unwrap());
+
+                        // Read all table entries at once
+                        let entries_offset = desc_offset + SECTION_DESCRIPTOR_SIZE as u64 + 24;
+                        file.seek(SeekFrom::Start(entries_offset))?;
+                        let mut entries_buf = vec![0u8; entry_count * 4];
+                        file.read_exact(&mut entries_buf)?;
+
+                        // Parse entries and build chunk metadata
+                        let mut prev_offset: Option<u64> = None;
+                        for i in 0..entry_count {
+                            let entry = TableEntry::parse(&entries_buf[i * 4..(i + 1) * 4])?;
+                            let abs_offset = entry.chunk_offset as u64 + base_offset;
+
+                            // Compute previous chunk's compressed size
+                            if let Some(po) = prev_offset {
+                                if let Some(prev_chunk) = chunks.last_mut() {
+                                    if prev_chunk.compressed {
+                                        let sz = abs_offset.saturating_sub(po);
+                                        if sz > 0 {
+                                            prev_chunk.size = sz;
+                                        }
+                                    }
+                                }
+                            }
+
+                            chunks.push(Chunk {
+                                segment_idx: seg_idx,
+                                compressed: entry.compressed,
+                                offset: abs_offset,
+                                size: chunk_size, // default; overwritten for compressed
+                            });
+
+                            prev_offset = Some(abs_offset);
+                        }
+                    }
+                    "hash" => {
+                        // EWF v1 hash section: 16B MD5 + 16B padding + 4B Adler-32 = 36 bytes
+                        // Located after the 76-byte section descriptor.
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut hash_buf = [0u8; 16];
+                        file.read_exact(&mut hash_buf)?;
+                        // Only set if we haven't already gotten MD5 from a digest section
+                        if stored_md5.is_none() {
+                            stored_md5 = Some(hash_buf);
+                        }
+                        log::debug!("parsed hash section: MD5 = {:02x?}", hash_buf);
+                    }
+                    "digest" => {
+                        // EWF v1 digest section: 16B MD5 + 20B SHA-1 + 40B padding + 4B Adler-32 = 80 bytes
+                        // Added in EnCase 6.12+. Located after the 76-byte section descriptor.
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut digest_buf = [0u8; 36];
+                        file.read_exact(&mut digest_buf)?;
+                        let mut md5 = [0u8; 16];
+                        let mut sha1 = [0u8; 20];
+                        md5.copy_from_slice(&digest_buf[0..16]);
+                        sha1.copy_from_slice(&digest_buf[16..36]);
+                        // Digest section is authoritative — overwrite hash section MD5
+                        stored_md5 = Some(md5);
+                        stored_sha1 = Some(sha1);
+                        log::debug!("parsed digest section: MD5 = {:02x?}, SHA-1 = {:02x?}", md5, sha1);
+                    }
+                    "header" if metadata.case_number.is_none() && metadata.os_version.is_none() => {
+                        // EWF v1 header: zlib-compressed ASCII, tab-delimited.
+                        // Format: version\r\n, "main"\r\n, field_names\r\n, field_values\r\n
+                        // Only parse if we haven't already populated metadata.
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        if data_size > 0 && data_size < 1_000_000 {
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut compressed = vec![0u8; data_size as usize];
+                            file.read_exact(&mut compressed)?;
+                            if let Ok(decompressed) = flate2::read::ZlibDecoder::new(&compressed[..])
+                                .bytes()
+                                .collect::<std::result::Result<Vec<u8>, _>>()
+                            {
+                                let text = String::from_utf8_lossy(&decompressed);
+                                parse_header_text(&text, &mut metadata);
+                            }
+                        }
+                    }
+                    "error2" => {
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        if data_size > 0 && data_size < 1_000_000 {
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut buf = vec![0u8; data_size as usize];
+                            file.read_exact(&mut buf)?;
+                            acquisition_errors = parse_error2_data(&buf);
+                            log::debug!("parsed error2 section: {} entries", acquisition_errors.len());
+                        }
+                    }
+                    _ => {
+                        // Skip header2, sectors, done, etc.
+                    }
+                }
+            }
+        }
+
+        if chunk_size == 0 {
+            return Err(EwfError::MissingVolume);
+        }
+
+        let cache = LruCache::new(std::num::NonZeroUsize::new(cache_size.max(1)).unwrap());
+
+        Ok(Self {
+            segments: ordered_segments,
+            chunks,
+            chunk_size,
+            total_size,
+            position: 0,
+            cache,
+            stored_md5,
+            stored_sha1,
+            metadata,
+            acquisition_errors,
+        })
+    }
+
+    /// Total logical size of the disk image in bytes.
+    pub fn total_size(&self) -> u64 {
+        self.total_size
+    }
+
+    /// Chunk size in bytes (typically 32768).
+    pub fn chunk_size(&self) -> u64 {
+        self.chunk_size
+    }
+
+    /// Number of chunks in the image.
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    /// Returns the integrity hashes stored within the EWF image by the acquisition tool.
+    ///
+    /// The `hash` section (EnCase 1+) stores an MD5 of the acquired media.
+    /// The `digest` section (EnCase 6.12+) stores both MD5 and SHA-1.
+    /// If neither section is present (e.g. some FTK Imager images), both fields will be `None`.
+    pub fn stored_hashes(&self) -> StoredHashes {
+        StoredHashes {
+            md5: self.stored_md5,
+            sha1: self.stored_sha1,
+        }
+    }
+
+    /// Returns case and acquisition metadata from the EWF header sections.
+    pub fn metadata(&self) -> &EwfMetadata {
+        &self.metadata
+    }
+
+    /// Returns sectors that had read errors during acquisition.
+    ///
+    /// Empty for clean acquisitions. Populated from the `error2` section when present.
+    pub fn acquisition_errors(&self) -> &[AcquisitionError] {
+        &self.acquisition_errors
+    }
+
+    /// Verify image integrity by streaming all media data through MD5 (and SHA-1 if
+    /// a stored SHA-1 exists) and comparing against the hashes stored in the image.
+    ///
+    /// Returns a [`VerifyResult`] with the computed hashes and match status.
+    /// If the image has no stored hashes, the computed hashes are still returned
+    /// but the match fields will be `None`.
+    ///
+    /// Requires the `verify` feature (enabled by default).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// let mut reader = ewf::EwfReader::open("image.E01").unwrap();
+    /// let result = reader.verify().unwrap();
+    /// if let Some(true) = result.md5_match {
+    ///     println!("Image integrity verified (MD5 match)");
+    /// }
+    /// ```
+    #[cfg(feature = "verify")]
+    pub fn verify(&mut self) -> Result<VerifyResult> {
+        use md5::Digest;
+
+        let has_sha1 = self.stored_sha1.is_some();
+
+        let mut md5_hasher = md5::Md5::new();
+        let mut sha1_hasher = if has_sha1 {
+            Some(sha1::Sha1::new())
+        } else {
+            None
+        };
+
+        // Stream all media data through the hashers
+        self.position = 0;
+        let mut buf = vec![0u8; self.chunk_size as usize];
+        let mut remaining = self.total_size;
+
+        while remaining > 0 {
+            let to_read = std::cmp::min(remaining, buf.len() as u64) as usize;
+            let n = io::Read::read(self, &mut buf[..to_read])?;
+            if n == 0 {
+                break;
+            }
+            md5_hasher.update(&buf[..n]);
+            if let Some(ref mut h) = sha1_hasher {
+                h.update(&buf[..n]);
+            }
+            remaining -= n as u64;
+        }
+
+        let computed_md5: [u8; 16] = md5_hasher.finalize().into();
+        let computed_sha1: Option<[u8; 20]> = sha1_hasher.map(|h| h.finalize().into());
+
+        let md5_match = self.stored_md5.map(|stored| stored == computed_md5);
+        let sha1_match = match (self.stored_sha1, computed_sha1) {
+            (Some(stored), Some(computed)) => Some(stored == computed),
+            _ => None,
+        };
+
+        Ok(VerifyResult {
+            computed_md5,
+            computed_sha1,
+            md5_match,
+            sha1_match,
+        })
+    }
+
+    /// Read and decompress a single chunk by its index.
+    fn read_chunk(&mut self, chunk_id: usize) -> Result<Vec<u8>> {
+        // Check cache
+        if let Some(cached) = self.cache.get(&chunk_id) {
+            return Ok(cached.clone());
+        }
+
+        let mut page = vec![0u8; self.chunk_size as usize];
+
+        // chunk_id is always in range: read_at() guards against out-of-range offsets
+        // before calling read_chunk(), so this index is safe.
+        let chunk = self.chunks[chunk_id].clone();
+        let file = &mut self.segments[chunk.segment_idx];
+
+        if !chunk.compressed {
+            // Raw read
+            file.seek(SeekFrom::Start(chunk.offset))?;
+            let to_read = std::cmp::min(chunk.size as usize, page.len());
+            file.read_exact(&mut page[..to_read])?;
+        } else {
+            // Read compressed data (may be shorter than chunk.size for last chunk)
+            let mut compressed = vec![0u8; chunk.size as usize];
+            file.seek(SeekFrom::Start(chunk.offset))?;
+            let mut total_read = 0;
+            while total_read < compressed.len() {
+                let n = file.read(&mut compressed[total_read..])?;
+                if n == 0 {
+                    break;
+                }
+                total_read += n;
+            }
+            let compressed = &compressed[..total_read];
+
+            // zlib decompress
+            let mut decoder = ZlibDecoder::new(compressed);
+            let mut total = 0;
+            loop {
+                match decoder.read(&mut page[total..]) {
+                    Ok(0) => break,
+                    Ok(n) => total += n,
+                    Err(e) => {
+                        return Err(EwfError::Decompression(e.to_string()));
+                    }
+                }
+            }
+        }
+
+        // Cache the result
+        self.cache.put(chunk_id, page.clone());
+        Ok(page)
+    }
+
+    /// Read bytes at an arbitrary logical offset (internal, no position tracking).
+    fn read_at(&mut self, buf: &mut [u8], offset: u64) -> Result<usize> {
+        let mut buf_idx = 0usize;
+        let mut off = offset;
+
+        loop {
+            let remaining_image = self.total_size.saturating_sub(off);
+            let remaining_buf = buf.len() - buf_idx;
+            let in_chunk = self.chunk_size - (off % self.chunk_size);
+
+            let to_read = in_chunk.min(remaining_image).min(remaining_buf as u64) as usize;
+
+            if to_read == 0 {
+                break;
+            }
+
+            let chunk_id = (off / self.chunk_size) as usize;
+            let page = self.read_chunk(chunk_id)?;
+
+            let page_offset = (off % self.chunk_size) as usize;
+            buf[buf_idx..buf_idx + to_read]
+                .copy_from_slice(&page[page_offset..page_offset + to_read]);
+
+            off += to_read as u64;
+            buf_idx += to_read;
+        }
+
+        Ok(buf_idx)
+    }
+}
+
+impl Read for EwfReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.read_at(buf, self.position).map_err(io::Error::other)?;
+        self.position += n as u64;
+        Ok(n)
+    }
+}
+
+impl Seek for EwfReader {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = match pos {
+            SeekFrom::Start(p) => p as i64,
+            SeekFrom::End(p) => self.total_size as i64 + p,
+            SeekFrom::Current(p) => self.position as i64 + p,
+        };
+        if new_pos < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek to negative position",
+            ));
+        }
+        self.position = new_pos as u64;
+        Ok(self.position)
+    }
+}
+
+impl std::fmt::Debug for EwfReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EwfReader")
+            .field("chunk_size", &self.chunk_size)
+            .field("total_size", &self.total_size)
+            .field("position", &self.position)
+            .field("chunk_count", &self.chunks.len())
+            .field("segment_count", &self.segments.len())
+            .finish()
+    }
+}
