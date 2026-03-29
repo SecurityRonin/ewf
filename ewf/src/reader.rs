@@ -771,7 +771,7 @@ impl Seek for EwfReader {
 ///   Line 2: section name ("main")
 ///   Line 3: field names (tab-separated, e.g. "b\tsc\tts")
 ///   Line 4: field values (tab-separated)
-fn parse_ewf2_device_info(raw: &[u8], chunk_size: &mut u64, total_size: &mut u64) {
+pub(crate) fn parse_ewf2_device_info(raw: &[u8], chunk_size: &mut u64, total_size: &mut u64) {
     // Decode UTF-16LE to String
     if raw.len() < 2 {
         return;
