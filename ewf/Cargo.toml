@@ -12,12 +12,18 @@ categories = ["parser-implementations", "filesystem"]
 readme = "../README.md"
 exclude = ["tests/data/", "tarpaulin-report.json"]
 
+[features]
+default = ["verify"]
+verify = ["dep:md-5", "dep:sha-1"]
+
 [dependencies]
 flate2 = "1"
 lru = "0.12"
 thiserror = "2"
 log = "0.4"
 glob = "0.3"
+md-5 = { version = "0.10", optional = true }
+sha-1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

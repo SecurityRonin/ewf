@@ -204,3 +204,47 @@ fn stored_hashes_returns_none_when_absent() {
     let reader = ewf::EwfReader::open(&path).unwrap();
     let _hashes = reader.stored_hashes(); // must not panic
 }
+
+// ---------- verify() — full-media hash verification ----------
+
+#[test]
+fn exfat1_verify_passes() {
+    // EnCase 6 image with stored MD5 — verify() should confirm integrity.
+    let path = format!("{DATA_DIR}/exfat1.E01");
+    let mut reader = ewf::EwfReader::open(&path).unwrap();
+    let result = reader.verify().unwrap();
+    assert!(result.md5_match.unwrap(), "MD5 verification should pass for intact image");
+}
+
+#[test]
+fn emails_verify_passes() {
+    let path = format!("{DATA_DIR}/nps-2010-emails.E01");
+    let mut reader = ewf::EwfReader::open(&path).unwrap();
+    let result = reader.verify().unwrap();
+    assert!(result.md5_match.unwrap(), "MD5 verification should pass for intact image");
+}
+
+#[test]
+fn verify_returns_none_when_no_stored_hashes() {
+    // FTK Imager image may not have hash/digest sections.
+    // verify() should return None for match fields (nothing to compare against).
+    let path = format!("{DATA_DIR}/imageformat_mmls_1.E01");
+    let mut reader = ewf::EwfReader::open(&path).unwrap();
+    let result = reader.verify().unwrap();
+    if reader.stored_hashes().md5.is_none() {
+        assert!(result.md5_match.is_none(), "No stored MD5 means md5_match should be None");
+    }
+}
+
+#[test]
+fn verify_computed_hashes_match_manual_stream() {
+    // Cross-check: verify()'s computed MD5 should match our manual full_media_md5() helper.
+    let path = format!("{DATA_DIR}/exfat1.E01");
+    let mut reader = ewf::EwfReader::open(&path).unwrap();
+    let result = reader.verify().unwrap();
+    assert_eq!(
+        hex(&result.computed_md5),
+        "0777ee90c27ed5ff5868af2015bed635",
+        "verify() computed MD5 should match independent full-media hash"
+    );
+}

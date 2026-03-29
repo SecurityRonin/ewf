@@ -76,6 +76,21 @@ pub struct StoredHashes {
     pub sha1: Option<[u8; 20]>,
 }
 
+/// Result of verifying the EWF image integrity by recomputing media hashes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyResult {
+    /// Computed MD5 of the full media stream.
+    pub computed_md5: [u8; 16],
+    /// Computed SHA-1 of the full media stream (only computed if a stored SHA-1 exists).
+    pub computed_sha1: Option<[u8; 20]>,
+    /// `Some(true)` if computed MD5 matches stored MD5, `Some(false)` if mismatch,
+    /// `None` if no stored MD5 was present.
+    pub md5_match: Option<bool>,
+    /// `Some(true)` if computed SHA-1 matches stored SHA-1, `Some(false)` if mismatch,
+    /// `None` if no stored SHA-1 was present.
+    pub sha1_match: Option<bool>,
+}
+
 // ---------------------------------------------------------------------------
 // EWF File Header (13 bytes)
 // ---------------------------------------------------------------------------
@@ -580,6 +595,72 @@ impl EwfReader {
             md5: self.stored_md5,
             sha1: self.stored_sha1,
         }
+    }
+
+    /// Verify image integrity by streaming all media data through MD5 (and SHA-1 if
+    /// a stored SHA-1 exists) and comparing against the hashes stored in the image.
+    ///
+    /// Returns a [`VerifyResult`] with the computed hashes and match status.
+    /// If the image has no stored hashes, the computed hashes are still returned
+    /// but the match fields will be `None`.
+    ///
+    /// Requires the `verify` feature (enabled by default).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// let mut reader = ewf::EwfReader::open("image.E01").unwrap();
+    /// let result = reader.verify().unwrap();
+    /// if let Some(true) = result.md5_match {
+    ///     println!("Image integrity verified (MD5 match)");
+    /// }
+    /// ```
+    #[cfg(feature = "verify")]
+    pub fn verify(&mut self) -> Result<VerifyResult> {
+        use md5::Digest;
+
+        let has_sha1 = self.stored_sha1.is_some();
+
+        let mut md5_hasher = md5::Md5::new();
+        let mut sha1_hasher = if has_sha1 {
+            Some(sha1::Sha1::new())
+        } else {
+            None
+        };
+
+        // Stream all media data through the hashers
+        self.position = 0;
+        let mut buf = vec![0u8; self.chunk_size as usize];
+        let mut remaining = self.total_size;
+
+        while remaining > 0 {
+            let to_read = std::cmp::min(remaining, buf.len() as u64) as usize;
+            let n = io::Read::read(self, &mut buf[..to_read])?;
+            if n == 0 {
+                break;
+            }
+            md5_hasher.update(&buf[..n]);
+            if let Some(ref mut h) = sha1_hasher {
+                h.update(&buf[..n]);
+            }
+            remaining -= n as u64;
+        }
+
+        let computed_md5: [u8; 16] = md5_hasher.finalize().into();
+        let computed_sha1: Option<[u8; 20]> = sha1_hasher.map(|h| h.finalize().into());
+
+        let md5_match = self.stored_md5.map(|stored| stored == computed_md5);
+        let sha1_match = match (self.stored_sha1, computed_sha1) {
+            (Some(stored), Some(computed)) => Some(stored == computed),
+            _ => None,
+        };
+
+        Ok(VerifyResult {
+            computed_md5,
+            computed_sha1,
+            md5_match,
+            sha1_match,
+        })
     }
 
     /// Read and decompress a single chunk by its index.
