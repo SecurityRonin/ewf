@@ -91,6 +91,70 @@ pub struct VerifyResult {
     pub sha1_match: Option<bool>,
 }
 
+/// Case and acquisition metadata extracted from EWF header sections.
+///
+/// Populated from the `header` section (ASCII, always present) or `header2` section
+/// (UTF-16LE, EnCase 5+). Fields are `None` when the acquisition tool left them blank.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EwfMetadata {
+    pub case_number: Option<String>,
+    pub evidence_number: Option<String>,
+    pub description: Option<String>,
+    pub examiner: Option<String>,
+    pub notes: Option<String>,
+    pub acquiry_software: Option<String>,
+    pub os_version: Option<String>,
+    pub acquiry_date: Option<String>,
+    pub system_date: Option<String>,
+}
+
+/// Parse the tab-delimited text from an EWF `header` section into metadata fields.
+///
+/// Format (version 1, ASCII):
+/// ```text
+/// 1\r\n
+/// main\r\n
+/// c\tn\ta\te\tt\tav\tov\tm\tu\tp\r\n
+/// val\tval\tval\t...\r\n
+/// ```
+///
+/// Field codes: c=case_number, n=evidence_number, a=description,
+/// e=examiner, t=notes, av=acquiry_software, ov=os_version,
+/// m=acquiry_date, u=system_date, p=password (ignored).
+fn parse_header_text(text: &str, meta: &mut EwfMetadata) {
+    // Normalize line endings and split into lines
+    let text = text.replace("\r\n", "\n");
+    let lines: Vec<&str> = text.split('\n').collect();
+
+    // Need at least 4 lines: version, "main", field names, field values
+    if lines.len() < 4 {
+        return;
+    }
+
+    let names: Vec<&str> = lines[2].split('\t').collect();
+    let values: Vec<&str> = lines[3].split('\t').collect();
+
+    for (i, &name) in names.iter().enumerate() {
+        let val = values.get(i).copied().unwrap_or("");
+        if val.is_empty() {
+            continue;
+        }
+        let field = match name {
+            "c" => &mut meta.case_number,
+            "n" => &mut meta.evidence_number,
+            "a" => &mut meta.description,
+            "e" => &mut meta.examiner,
+            "t" => &mut meta.notes,
+            "av" => &mut meta.acquiry_software,
+            "ov" => &mut meta.os_version,
+            "m" => &mut meta.acquiry_date,
+            "u" => &mut meta.system_date,
+            _ => continue,
+        };
+        *field = Some(val.to_string());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EWF File Header (13 bytes)
 // ---------------------------------------------------------------------------
@@ -339,6 +403,8 @@ pub struct EwfReader {
     stored_md5: Option<[u8; 16]>,
     /// SHA-1 from digest section (20 bytes), if present.
     stored_sha1: Option<[u8; 20]>,
+    /// Case and acquisition metadata from header sections.
+    metadata: EwfMetadata,
 }
 
 impl EwfReader {
@@ -415,6 +481,7 @@ impl EwfReader {
         let mut chunks: Vec<Chunk> = Vec::new();
         let mut stored_md5: Option<[u8; 16]> = None;
         let mut stored_sha1: Option<[u8; 20]> = None;
+        let mut metadata = EwfMetadata::default();
 
         for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
             // First section descriptor starts at offset 13 (right after file header)
@@ -545,8 +612,27 @@ impl EwfReader {
                         stored_sha1 = Some(sha1);
                         log::debug!("parsed digest section: MD5 = {:02x?}, SHA-1 = {:02x?}", md5, sha1);
                     }
+                    "header" if metadata.case_number.is_none() && metadata.os_version.is_none() => {
+                        // EWF v1 header: zlib-compressed ASCII, tab-delimited.
+                        // Format: version\r\n, "main"\r\n, field_names\r\n, field_values\r\n
+                        // Only parse if we haven't already populated metadata.
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        if data_size > 0 && data_size < 1_000_000 {
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut compressed = vec![0u8; data_size as usize];
+                            file.read_exact(&mut compressed)?;
+                            if let Ok(decompressed) = flate2::read::ZlibDecoder::new(&compressed[..])
+                                .bytes()
+                                .collect::<std::result::Result<Vec<u8>, _>>()
+                            {
+                                let text = String::from_utf8_lossy(&decompressed);
+                                parse_header_text(&text, &mut metadata);
+                            }
+                        }
+                    }
                     _ => {
-                        // Skip header, header2, sectors, done, etc.
+                        // Skip header2, sectors, done, etc.
                     }
                 }
             }
@@ -567,6 +653,7 @@ impl EwfReader {
             cache,
             stored_md5,
             stored_sha1,
+            metadata,
         })
     }
 
@@ -595,6 +682,11 @@ impl EwfReader {
             md5: self.stored_md5,
             sha1: self.stored_sha1,
         }
+    }
+
+    /// Returns case and acquisition metadata from the EWF header sections.
+    pub fn metadata(&self) -> &EwfMetadata {
+        &self.metadata
     }
 
     /// Verify image integrity by streaming all media data through MD5 (and SHA-1 if

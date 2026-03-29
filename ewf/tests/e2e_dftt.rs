@@ -248,3 +248,46 @@ fn verify_computed_hashes_match_manual_stream() {
         "verify() computed MD5 should match independent full-media hash"
     );
 }
+
+// ---------- metadata() — header section parsing ----------
+
+#[test]
+fn mmls1_metadata_has_case_info() {
+    // FTK Imager image has rich metadata: case, evidence, examiner, description, notes.
+    let path = format!("{DATA_DIR}/imageformat_mmls_1.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let meta = reader.metadata();
+    assert_eq!(meta.case_number.as_deref(), Some("1"));
+    assert_eq!(meta.evidence_number.as_deref(), Some("1"));
+    assert_eq!(meta.description.as_deref(), Some("Test E01 for sleuthkit"));
+    assert_eq!(meta.examiner.as_deref(), Some("Rishwanth"));
+    assert_eq!(meta.notes.as_deref(), Some("Used to test sleuthkit libraries"));
+}
+
+#[test]
+fn mmls1_metadata_has_tool_info() {
+    let path = format!("{DATA_DIR}/imageformat_mmls_1.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let meta = reader.metadata();
+    assert_eq!(meta.acquiry_software.as_deref(), Some("ADI2.9.0.13"));
+    assert_eq!(meta.os_version.as_deref(), Some("Windows 200x"));
+}
+
+#[test]
+fn exfat1_metadata_has_os_and_dates() {
+    // EnCase 6 image — sparse case info but has OS and dates.
+    let path = format!("{DATA_DIR}/exfat1.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let meta = reader.metadata();
+    assert_eq!(meta.os_version.as_deref(), Some("Darwin"));
+    assert!(meta.acquiry_date.is_some(), "Should have acquisition date");
+    assert!(meta.system_date.is_some(), "Should have system date");
+}
+
+#[test]
+fn emails_metadata_parses_without_panic() {
+    let path = format!("{DATA_DIR}/nps-2010-emails.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let meta = reader.metadata();
+    assert_eq!(meta.os_version.as_deref(), Some("Darwin"));
+}
