@@ -108,6 +108,18 @@ pub struct EwfMetadata {
     pub system_date: Option<String>,
 }
 
+/// A range of sectors that had read errors during acquisition.
+///
+/// Extracted from the `error2` section, which records bad sectors encountered
+/// by the imaging tool. Clean acquisitions have no entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcquisitionError {
+    /// First sector in the error range.
+    pub first_sector: u32,
+    /// Number of consecutive sectors in the error range.
+    pub sector_count: u32,
+}
+
 /// Parse the tab-delimited text from an EWF `header` section into metadata fields.
 ///
 /// Format (version 1, ASCII):
@@ -153,6 +165,39 @@ fn parse_header_text(text: &str, meta: &mut EwfMetadata) {
         };
         *field = Some(val.to_string());
     }
+}
+
+/// Parse EWF `error2` section data into acquisition error entries.
+///
+/// Layout (little-endian, after the 76-byte section descriptor):
+/// - `u32` number_of_entries
+/// - 4 bytes padding
+/// - For each entry: `u32` first_sector + `u32` number_of_sectors
+/// - 4 bytes Adler-32 checksum
+pub fn parse_error2_data(data: &[u8]) -> Vec<AcquisitionError> {
+    if data.len() < 8 {
+        return Vec::new();
+    }
+    let entry_count = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+    if entry_count == 0 {
+        return Vec::new();
+    }
+    // Each entry is 8 bytes (u32 first_sector + u32 sector_count), starting at offset 8
+    let entries_start = 8;
+    let mut errors = Vec::with_capacity(entry_count);
+    for i in 0..entry_count {
+        let off = entries_start + i * 8;
+        if off + 8 > data.len() {
+            break;
+        }
+        let first_sector = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+        let sector_count = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap());
+        errors.push(AcquisitionError {
+            first_sector,
+            sector_count,
+        });
+    }
+    errors
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +450,8 @@ pub struct EwfReader {
     stored_sha1: Option<[u8; 20]>,
     /// Case and acquisition metadata from header sections.
     metadata: EwfMetadata,
+    /// Sectors with read errors during acquisition (from error2 section).
+    acquisition_errors: Vec<AcquisitionError>,
 }
 
 impl EwfReader {
@@ -482,6 +529,7 @@ impl EwfReader {
         let mut stored_md5: Option<[u8; 16]> = None;
         let mut stored_sha1: Option<[u8; 20]> = None;
         let mut metadata = EwfMetadata::default();
+        let mut acquisition_errors: Vec<AcquisitionError> = Vec::new();
 
         for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
             // First section descriptor starts at offset 13 (right after file header)
@@ -631,6 +679,17 @@ impl EwfReader {
                             }
                         }
                     }
+                    "error2" => {
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        if data_size > 0 && data_size < 1_000_000 {
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut buf = vec![0u8; data_size as usize];
+                            file.read_exact(&mut buf)?;
+                            acquisition_errors = parse_error2_data(&buf);
+                            log::debug!("parsed error2 section: {} entries", acquisition_errors.len());
+                        }
+                    }
                     _ => {
                         // Skip header2, sectors, done, etc.
                     }
@@ -654,6 +713,7 @@ impl EwfReader {
             stored_md5,
             stored_sha1,
             metadata,
+            acquisition_errors,
         })
     }
 
@@ -687,6 +747,13 @@ impl EwfReader {
     /// Returns case and acquisition metadata from the EWF header sections.
     pub fn metadata(&self) -> &EwfMetadata {
         &self.metadata
+    }
+
+    /// Returns sectors that had read errors during acquisition.
+    ///
+    /// Empty for clean acquisitions. Populated from the `error2` section when present.
+    pub fn acquisition_errors(&self) -> &[AcquisitionError] {
+        &self.acquisition_errors
     }
 
     /// Verify image integrity by streaming all media data through MD5 (and SHA-1 if

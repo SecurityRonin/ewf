@@ -291,3 +291,55 @@ fn emails_metadata_parses_without_panic() {
     let meta = reader.metadata();
     assert_eq!(meta.os_version.as_deref(), Some("Darwin"));
 }
+
+// ---------- acquisition_errors() — error2 section parsing ----------
+
+#[test]
+fn clean_image_has_no_acquisition_errors() {
+    // All our test images had clean acquisitions — no read errors.
+    for name in ["exfat1.E01", "imageformat_mmls_1.E01", "nps-2010-emails.E01"] {
+        let path = format!("{DATA_DIR}/{name}");
+        let reader = ewf::EwfReader::open(&path).unwrap();
+        assert!(
+            reader.acquisition_errors().is_empty(),
+            "{name} should have no acquisition errors"
+        );
+    }
+}
+
+#[test]
+fn parse_error2_data_extracts_entries() {
+    // Synthetic error2 section data:
+    // u32 number_of_entries = 2
+    // 4 bytes padding
+    // Entry 1: first_sector=100, sector_count=5
+    // Entry 2: first_sector=5000, sector_count=1
+    // 4 bytes Adler-32 (ignored for now)
+    let mut data = Vec::new();
+    data.extend_from_slice(&2u32.to_le_bytes()); // entry count
+    data.extend_from_slice(&[0u8; 4]); // padding
+    data.extend_from_slice(&100u32.to_le_bytes()); // entry 1 first_sector
+    data.extend_from_slice(&5u32.to_le_bytes()); // entry 1 sector_count
+    data.extend_from_slice(&5000u32.to_le_bytes()); // entry 2 first_sector
+    data.extend_from_slice(&1u32.to_le_bytes()); // entry 2 sector_count
+    data.extend_from_slice(&[0u8; 4]); // checksum placeholder
+
+    let errors = ewf::parse_error2_data(&data);
+    assert_eq!(errors.len(), 2);
+    assert_eq!(errors[0].first_sector, 100);
+    assert_eq!(errors[0].sector_count, 5);
+    assert_eq!(errors[1].first_sector, 5000);
+    assert_eq!(errors[1].sector_count, 1);
+}
+
+#[test]
+fn parse_error2_data_handles_empty() {
+    // Zero entries
+    let mut data = Vec::new();
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&[0u8; 4]);
+    data.extend_from_slice(&[0u8; 4]); // checksum
+
+    let errors = ewf::parse_error2_data(&data);
+    assert!(errors.is_empty());
+}
