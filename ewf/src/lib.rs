@@ -2128,4 +2128,76 @@ mod tests {
         reader.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"SEEKTEST");
     }
+
+    // -- validate_and_reorder_segments direct unit tests --
+
+    fn make_temp_files(n: usize) -> (tempfile::TempDir, Vec<std::fs::File>) {
+        let dir = tempfile::tempdir().unwrap();
+        let files: Vec<std::fs::File> = (0..n)
+            .map(|i| {
+                let p = dir.path().join(format!("seg{i}"));
+                std::fs::File::create(&p).unwrap();
+                std::fs::File::open(&p).unwrap()
+            })
+            .collect();
+        (dir, files)
+    }
+
+    #[test]
+    fn validate_reorder_sequential_segments() {
+        let (_dir, files) = make_temp_files(3);
+        let result = crate::reader::validate_and_reorder_segments(files, vec![1, 2, 3]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn validate_reorder_out_of_order_segments() {
+        let (_dir, files) = make_temp_files(3);
+        // Segment numbers 3, 1, 2 — should reorder to 1, 2, 3
+        let result = crate::reader::validate_and_reorder_segments(files, vec![3, 1, 2]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn validate_reorder_single_segment() {
+        let (_dir, files) = make_temp_files(1);
+        let result = crate::reader::validate_and_reorder_segments(files, vec![1]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn validate_reorder_detects_gap() {
+        let (_dir, files) = make_temp_files(2);
+        // Segments 1 and 3 — gap at 2
+        let result = crate::reader::validate_and_reorder_segments(files, vec![1, 3]);
+        assert!(
+            matches!(result, Err(EwfError::SegmentGap { expected: 2, got: 3 })),
+            "Should detect gap: {:?}", result
+        );
+    }
+
+    #[test]
+    fn validate_reorder_detects_gap_starting_at_zero() {
+        let (_dir, files) = make_temp_files(1);
+        // Segment 0 instead of 1 — gap at start
+        let result = crate::reader::validate_and_reorder_segments(files, vec![0]);
+        assert!(
+            matches!(result, Err(EwfError::SegmentGap { expected: 1, got: 0 })),
+            "Should reject segment 0: {:?}", result
+        );
+    }
+
+    #[test]
+    fn validate_reorder_detects_duplicate_segments() {
+        let (_dir, files) = make_temp_files(2);
+        // Two files both claiming to be segment 1
+        let result = crate::reader::validate_and_reorder_segments(files, vec![1, 1]);
+        assert!(
+            matches!(result, Err(EwfError::SegmentGap { .. })),
+            "Should reject duplicate segment numbers: {:?}", result
+        );
+    }
 }

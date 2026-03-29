@@ -95,7 +95,7 @@ const DEFAULT_V2_CHUNK_SIZE: u64 = 32768;
 
 /// Validate that segment numbers are sequential (1, 2, 3, ...) and reorder
 /// file handles to match. Shared by both v1 and v2 reader paths.
-fn validate_and_reorder_segments(
+pub(crate) fn validate_and_reorder_segments(
     segments: Vec<File>,
     segment_numbers: Vec<u32>,
 ) -> Result<Vec<File>> {
