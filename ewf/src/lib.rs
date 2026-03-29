@@ -1838,6 +1838,97 @@ mod tests {
         assert_eq!(&buf, data);
     }
 
+    // -- V2 SHA-1 hash section parsing --
+
+    fn build_synthetic_ex01_with_md5_and_sha1(data: &[u8]) -> (NamedTempFile, [u8; 16], [u8; 20]) {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+
+        let chunk_size: u32 = 32768;
+        let mut padded = data.to_vec();
+        padded.resize(chunk_size as usize, 0);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&padded).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let fake_md5: [u8; 16] = [
+            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        ];
+        let fake_sha1: [u8; 20] = [
+            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9,
+            0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9,
+        ];
+
+        fn make_v2_desc(section_type: u32, data_size: u64, prev: u64) -> [u8; 64] {
+            let mut d = [0u8; 64];
+            d[0..4].copy_from_slice(&section_type.to_le_bytes());
+            d[8..16].copy_from_slice(&prev.to_le_bytes());
+            d[16..24].copy_from_slice(&data_size.to_le_bytes());
+            d[24..28].copy_from_slice(&64u32.to_le_bytes());
+            d
+        }
+
+        // Layout: header(32) + sector_table(64+36) + md5(64+16) + sha1(64+20) + sectors(64+C) + done(64)
+        let tbl_off = 32usize;
+        let tbl_data = 20 + 16; // table header + 1 entry
+        let md5_off = tbl_off + 64 + tbl_data;
+        let sha1_off = md5_off + 64 + 16;
+        let sec_off = sha1_off + 64 + 20;
+        let sec_data_off = sec_off + 64;
+        let done_off = sec_data_off + compressed.len();
+
+        let mut f = Vec::new();
+
+        // Header
+        f.extend_from_slice(&ewf2::EVF2_SIGNATURE);
+        f.push(2); f.push(1);
+        f.extend_from_slice(&1u16.to_le_bytes());
+        f.extend_from_slice(&1u32.to_le_bytes());
+        f.extend_from_slice(&[0u8; 16]);
+
+        // SectorTable (0x04)
+        f.extend_from_slice(&make_v2_desc(0x04, tbl_data as u64, 0));
+        let mut tbl_hdr = [0u8; 20];
+        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes());
+        f.extend_from_slice(&tbl_hdr);
+        let mut entry = [0u8; 16];
+        entry[0..8].copy_from_slice(&(sec_data_off as u64).to_le_bytes());
+        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
+        f.extend_from_slice(&entry);
+
+        // Md5Hash (0x08)
+        f.extend_from_slice(&make_v2_desc(0x08, 16, tbl_off as u64));
+        f.extend_from_slice(&fake_md5);
+
+        // Sha1Hash (0x09)
+        f.extend_from_slice(&make_v2_desc(0x09, 20, md5_off as u64));
+        f.extend_from_slice(&fake_sha1);
+
+        // SectorData (0x03)
+        f.extend_from_slice(&make_v2_desc(0x03, compressed.len() as u64, sha1_off as u64));
+        f.extend_from_slice(&compressed);
+
+        // Done (0x0F)
+        f.extend_from_slice(&make_v2_desc(0x0F, 0, sec_off as u64));
+        assert_eq!(f.len(), done_off + 64);
+
+        let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
+        tmp.write_all(&f).unwrap();
+        tmp.flush().unwrap();
+        (tmp, fake_md5, fake_sha1)
+    }
+
+    #[test]
+    fn ewf2_reader_parses_sha1_hash_section() {
+        let (tmp, expected_md5, expected_sha1) = build_synthetic_ex01_with_md5_and_sha1(b"sha1 test");
+        let reader = EwfReader::open(tmp.path()).unwrap();
+        let hashes = reader.stored_hashes();
+        assert_eq!(hashes.md5, Some(expected_md5), "V2 MD5 should be parsed");
+        assert_eq!(hashes.sha1, Some(expected_sha1), "V2 SHA-1 should be parsed");
+    }
+
     // -- EWF2 reader coverage: Debug impl --
 
     #[test]

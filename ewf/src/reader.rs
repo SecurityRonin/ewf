@@ -468,7 +468,7 @@ impl EwfReader {
         let mut total_size: u64 = 0;
         let mut chunks: Vec<Chunk> = Vec::new();
         let mut stored_md5: Option<[u8; 16]> = None;
-        let stored_sha1: Option<[u8; 20]> = None;
+        let mut stored_sha1: Option<[u8; 20]> = None;
         let metadata = EwfMetadata::default();
         let acquisition_errors: Vec<AcquisitionError> = Vec::new();
 
@@ -544,6 +544,16 @@ impl EwfReader {
                             file.read_exact(&mut hash)?;
                             stored_md5 = Some(hash);
                             log::debug!("parsed v2 md5_hash section: {:02x?}", hash);
+                        }
+                    }
+                    ewf2::Ewf2SectionType::Sha1Hash => {
+                        if desc.data_size >= 20 {
+                            let data_offset = desc_offset + desc.descriptor_size as u64;
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut hash = [0u8; 20];
+                            file.read_exact(&mut hash)?;
+                            stored_sha1 = Some(hash);
+                            log::debug!("parsed v2 sha1_hash section: {:02x?}", hash);
                         }
                     }
                     ewf2::Ewf2SectionType::Done | ewf2::Ewf2SectionType::Next => {
