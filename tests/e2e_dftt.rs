@@ -159,3 +159,48 @@ fn emails_sequential_equals_random_access() {
 
     assert_eq!(sequential, random_access);
 }
+
+// ---------- stored_hashes() — hash and digest section parsing ----------
+
+/// Helper: format a raw byte array as a lowercase hex string.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn exfat1_stored_md5_matches_media_hash() {
+    // exfat1.E01 was created by EnCase 6, which writes a `hash` section
+    // containing the MD5 of the acquired media.
+    let path = format!("{DATA_DIR}/exfat1.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let hashes = reader.stored_hashes();
+    let md5 = hashes.md5.expect("EnCase 6 image should contain stored MD5");
+    assert_eq!(
+        hex(&md5),
+        "0777ee90c27ed5ff5868af2015bed635",
+        "Stored MD5 should match full-media MD5"
+    );
+}
+
+#[test]
+fn emails_stored_md5_matches_media_hash() {
+    // nps-2010-emails.E01 was also created by EnCase 6.
+    let path = format!("{DATA_DIR}/nps-2010-emails.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let hashes = reader.stored_hashes();
+    let md5 = hashes.md5.expect("EnCase 6 image should contain stored MD5");
+    assert_eq!(
+        hex(&md5),
+        "7dae50cec8163697415e69fd72387c01",
+        "Stored MD5 should match full-media MD5"
+    );
+}
+
+#[test]
+fn stored_hashes_returns_none_when_absent() {
+    // FTK Imager images may not have hash/digest sections.
+    // At minimum, stored_hashes() must not panic — None is acceptable.
+    let path = format!("{DATA_DIR}/imageformat_mmls_1.E01");
+    let reader = ewf::EwfReader::open(&path).unwrap();
+    let _hashes = reader.stored_hashes(); // must not panic
+}

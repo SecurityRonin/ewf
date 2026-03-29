@@ -60,6 +60,23 @@ pub enum EwfError {
 pub type Result<T> = std::result::Result<T, EwfError>;
 
 // ---------------------------------------------------------------------------
+// Stored Hashes (from hash/digest sections)
+// ---------------------------------------------------------------------------
+
+/// Integrity hashes stored within the EWF image by the acquisition tool.
+///
+/// The `hash` section (present since EnCase 1) stores an MD5 of the acquired media.
+/// The `digest` section (added in EnCase 6.12+) stores both MD5 and SHA-1.
+/// When both sections are present, MD5 values should be identical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredHashes {
+    /// MD5 hash of the acquired media (from `hash` or `digest` section).
+    pub md5: Option<[u8; 16]>,
+    /// SHA-1 hash of the acquired media (from `digest` section only).
+    pub sha1: Option<[u8; 20]>,
+}
+
+// ---------------------------------------------------------------------------
 // EWF File Header (13 bytes)
 // ---------------------------------------------------------------------------
 
@@ -303,6 +320,10 @@ pub struct EwfReader {
     position: u64,
     /// LRU cache: chunk_id -> decompressed chunk data.
     cache: LruCache<usize, Vec<u8>>,
+    /// MD5 from hash/digest section (16 bytes), if present.
+    stored_md5: Option<[u8; 16]>,
+    /// SHA-1 from digest section (20 bytes), if present.
+    stored_sha1: Option<[u8; 20]>,
 }
 
 impl EwfReader {
@@ -373,10 +394,12 @@ impl EwfReader {
             ordered_segments.push(final_segments[idx].take().unwrap());
         }
 
-        // Walk section descriptors in each segment to find volume and table sections
+        // Walk section descriptors in each segment to find volume, table, hash, and digest sections
         let mut chunk_size: u64 = 0;
         let mut total_size: u64 = 0;
         let mut chunks: Vec<Chunk> = Vec::new();
+        let mut stored_md5: Option<[u8; 16]> = None;
+        let mut stored_sha1: Option<[u8; 20]> = None;
 
         for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
             // First section descriptor starts at offset 13 (right after file header)
@@ -478,8 +501,37 @@ impl EwfReader {
                             prev_offset = Some(abs_offset);
                         }
                     }
+                    "hash" => {
+                        // EWF v1 hash section: 16B MD5 + 16B padding + 4B Adler-32 = 36 bytes
+                        // Located after the 76-byte section descriptor.
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut hash_buf = [0u8; 16];
+                        file.read_exact(&mut hash_buf)?;
+                        // Only set if we haven't already gotten MD5 from a digest section
+                        if stored_md5.is_none() {
+                            stored_md5 = Some(hash_buf);
+                        }
+                        log::debug!("parsed hash section: MD5 = {:02x?}", hash_buf);
+                    }
+                    "digest" => {
+                        // EWF v1 digest section: 16B MD5 + 20B SHA-1 + 40B padding + 4B Adler-32 = 80 bytes
+                        // Added in EnCase 6.12+. Located after the 76-byte section descriptor.
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut digest_buf = [0u8; 36];
+                        file.read_exact(&mut digest_buf)?;
+                        let mut md5 = [0u8; 16];
+                        let mut sha1 = [0u8; 20];
+                        md5.copy_from_slice(&digest_buf[0..16]);
+                        sha1.copy_from_slice(&digest_buf[16..36]);
+                        // Digest section is authoritative — overwrite hash section MD5
+                        stored_md5 = Some(md5);
+                        stored_sha1 = Some(sha1);
+                        log::debug!("parsed digest section: MD5 = {:02x?}, SHA-1 = {:02x?}", md5, sha1);
+                    }
                     _ => {
-                        // Skip header, header2, sectors, hash, digest, done, etc.
+                        // Skip header, header2, sectors, done, etc.
                     }
                 }
             }
@@ -498,6 +550,8 @@ impl EwfReader {
             total_size,
             position: 0,
             cache,
+            stored_md5,
+            stored_sha1,
         })
     }
 
@@ -514,6 +568,18 @@ impl EwfReader {
     /// Number of chunks in the image.
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
+    }
+
+    /// Returns the integrity hashes stored within the EWF image by the acquisition tool.
+    ///
+    /// The `hash` section (EnCase 1+) stores an MD5 of the acquired media.
+    /// The `digest` section (EnCase 6.12+) stores both MD5 and SHA-1.
+    /// If neither section is present (e.g. some FTK Imager images), both fields will be `None`.
+    pub fn stored_hashes(&self) -> StoredHashes {
+        StoredHashes {
+            md5: self.stored_md5,
+            sha1: self.stored_sha1,
+        }
     }
 
     /// Read and decompress a single chunk by its index.
