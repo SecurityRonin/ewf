@@ -7,6 +7,7 @@
 //! - O(1) seeking via flat chunk index
 
 mod error;
+pub mod ewf2;
 mod parse;
 mod reader;
 mod sections;
@@ -1389,5 +1390,135 @@ mod tests {
         // but the files are too short to have volume sections.
         // The error will be about buffer reading, not segment discovery.
         assert!(result.is_err());
+    }
+
+    // -- EWF2 type parsing tests --
+
+    fn make_ewf2_file_header(is_physical: bool, segment: u32, compression: u16) -> [u8; 32] {
+        let mut buf = [0u8; 32];
+        let sig = if is_physical { ewf2::EVF2_SIGNATURE } else { ewf2::LEF2_SIGNATURE };
+        buf[0..8].copy_from_slice(&sig);
+        buf[8] = 0x02;
+        buf[9] = 0x01;
+        buf[10..12].copy_from_slice(&compression.to_le_bytes());
+        buf[12..16].copy_from_slice(&segment.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn ewf2_parse_ex01_header() {
+        let buf = make_ewf2_file_header(true, 1, 1);
+        let header = ewf2::Ewf2FileHeader::parse(&buf).unwrap();
+        assert!(header.is_physical, "Ex01 should be physical");
+        assert_eq!(header.major_version, 2);
+        assert_eq!(header.minor_version, 1);
+        assert_eq!(header.compression_method, ewf2::CompressionMethod::Zlib);
+        assert_eq!(header.segment_number, 1);
+    }
+
+    #[test]
+    fn ewf2_parse_lx01_header() {
+        let buf = make_ewf2_file_header(false, 3, 2);
+        let header = ewf2::Ewf2FileHeader::parse(&buf).unwrap();
+        assert!(!header.is_physical, "Lx01 should not be physical");
+        assert_eq!(header.compression_method, ewf2::CompressionMethod::Bzip2);
+        assert_eq!(header.segment_number, 3);
+    }
+
+    #[test]
+    fn ewf2_header_rejects_v1_signature() {
+        let v1_buf = make_file_header(1);
+        let mut buf = [0u8; 32];
+        buf[..13].copy_from_slice(&v1_buf);
+        assert!(ewf2::Ewf2FileHeader::parse(&buf).is_err());
+    }
+
+    #[test]
+    fn ewf2_header_rejects_short_buffer() {
+        assert!(ewf2::Ewf2FileHeader::parse(&[0u8; 10]).is_err());
+    }
+
+    fn make_ewf2_section_descriptor(
+        section_type: u32, data_flags: u32, prev_offset: u64, data_size: u64,
+    ) -> [u8; 64] {
+        let mut buf = [0u8; 64];
+        buf[0..4].copy_from_slice(&section_type.to_le_bytes());
+        buf[4..8].copy_from_slice(&data_flags.to_le_bytes());
+        buf[8..16].copy_from_slice(&prev_offset.to_le_bytes());
+        buf[16..24].copy_from_slice(&data_size.to_le_bytes());
+        buf[24..28].copy_from_slice(&64u32.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn ewf2_parse_section_descriptor() {
+        let buf = make_ewf2_section_descriptor(0x03, 0x01, 100, 65536);
+        let desc = ewf2::Ewf2SectionDescriptor::parse(&buf, 200).unwrap();
+        assert_eq!(desc.section_type, ewf2::Ewf2SectionType::SectorData);
+        assert!(desc.is_md5_hashed());
+        assert!(!desc.is_encrypted());
+        assert_eq!(desc.previous_offset, 100);
+        assert_eq!(desc.data_size, 65536);
+        assert_eq!(desc.offset, 200);
+    }
+
+    #[test]
+    fn ewf2_section_descriptor_encrypted_flag() {
+        let buf = make_ewf2_section_descriptor(0x08, 0x03, 0, 20);
+        let desc = ewf2::Ewf2SectionDescriptor::parse(&buf, 0).unwrap();
+        assert_eq!(desc.section_type, ewf2::Ewf2SectionType::Md5Hash);
+        assert!(desc.is_encrypted());
+    }
+
+    #[test]
+    fn ewf2_section_type_names() {
+        assert_eq!(ewf2::Ewf2SectionType::SectorData.name(), "sector_data");
+        assert_eq!(ewf2::Ewf2SectionType::Done.name(), "done");
+        assert_eq!(ewf2::Ewf2SectionType::Unknown(0xFF).name(), "unknown");
+    }
+
+    fn make_ewf2_table_entry(offset: u64, size: u32, flags: u32) -> [u8; 16] {
+        let mut buf = [0u8; 16];
+        buf[0..8].copy_from_slice(&offset.to_le_bytes());
+        buf[8..12].copy_from_slice(&size.to_le_bytes());
+        buf[12..16].copy_from_slice(&flags.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn ewf2_parse_compressed_table_entry() {
+        let buf = make_ewf2_table_entry(4096, 30000, 0x01);
+        let entry = ewf2::Ewf2TableEntry::parse(&buf).unwrap();
+        assert_eq!(entry.chunk_data_offset, 4096);
+        assert_eq!(entry.chunk_data_size, 30000);
+        assert!(entry.is_compressed());
+        assert!(!entry.is_checksumed());
+        assert!(!entry.is_pattern_fill());
+    }
+
+    #[test]
+    fn ewf2_parse_uncompressed_table_entry() {
+        let buf = make_ewf2_table_entry(8192, 32768, 0x02);
+        let entry = ewf2::Ewf2TableEntry::parse(&buf).unwrap();
+        assert!(!entry.is_compressed());
+        assert!(entry.is_checksumed());
+    }
+
+    #[test]
+    fn ewf2_parse_pattern_fill_entry() {
+        let buf = make_ewf2_table_entry(0, 0, 0x05);
+        let entry = ewf2::Ewf2TableEntry::parse(&buf).unwrap();
+        assert!(entry.is_pattern_fill());
+        assert_eq!(entry.chunk_data_size, 0);
+    }
+
+    #[test]
+    fn ewf2_parse_table_header() {
+        let mut buf = [0u8; 20];
+        buf[0..8].copy_from_slice(&0u64.to_le_bytes());
+        buf[8..12].copy_from_slice(&128u32.to_le_bytes());
+        let header = ewf2::Ewf2TableHeader::parse(&buf).unwrap();
+        assert_eq!(header.first_chunk, 0);
+        assert_eq!(header.entry_count, 128);
     }
 }

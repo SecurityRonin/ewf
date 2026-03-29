@@ -27,6 +27,12 @@ pub enum EwfError {
 
     #[error("no segment files found matching: {0}")]
     NoSegments(String),
+
+    #[error("parse error: {0}")]
+    Parse(String),
+
+    #[error("encrypted EWF2 images are not supported")]
+    EncryptedNotSupported,
 }
 
 pub type Result<T> = std::result::Result<T, EwfError>;
