@@ -860,8 +860,11 @@ pub(crate) fn parse_ewf2_device_info(raw: &[u8], chunk_size: &mut u64, total_siz
         }
     }
 
-    *chunk_size = bytes_per_sector * sectors_per_chunk;
-    if total_sectors > 0 {
+    let computed_chunk_size = bytes_per_sector * sectors_per_chunk;
+    if computed_chunk_size > 0 {
+        *chunk_size = computed_chunk_size;
+    }
+    if total_sectors > 0 && bytes_per_sector > 0 {
         *total_size = bytes_per_sector * total_sectors;
     }
 }

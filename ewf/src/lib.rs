@@ -2033,6 +2033,33 @@ mod tests {
         assert_eq!(ts, 512 * 128);
     }
 
+    #[test]
+    fn parse_ewf2_device_info_zero_bytes_per_sector_leaves_chunk_size() {
+        use crate::reader::parse_ewf2_device_info;
+        // If bytes_per_sector = 0, computed chunk_size would be 0.
+        // Parser should NOT overwrite chunk_size — leave caller's value intact.
+        let mut cs: u64 = 99999; // sentinel
+        let mut ts: u64 = 0;
+        let text = "2\nmain\nb\tsc\tts\n0\t64\t128\n";
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
+        assert_eq!(cs, 99999, "chunk_size should be unchanged when bytes_per_sector=0");
+        assert_eq!(ts, 0, "total_size should be unchanged when bytes_per_sector=0");
+    }
+
+    #[test]
+    fn parse_ewf2_device_info_zero_sectors_per_chunk_leaves_chunk_size() {
+        use crate::reader::parse_ewf2_device_info;
+        let mut cs: u64 = 99999;
+        let mut ts: u64 = 0;
+        let text = "2\nmain\nb\tsc\tts\n512\t0\t128\n";
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
+        assert_eq!(cs, 99999, "chunk_size should be unchanged when sectors_per_chunk=0");
+        // total_size still computable: 512 * 128 = 65536
+        assert_eq!(ts, 512 * 128, "total_size should still be computed from valid bytes_per_sector");
+    }
+
     // -- reader.rs coverage: v2 truncated chain --
 
     // -- reader.rs coverage: v2 segment gap --
