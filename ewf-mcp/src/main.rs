@@ -261,6 +261,9 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
     use std::io::{Read, Seek, SeekFrom};
 
     // Parse hex pattern
+    if pattern_hex.len() % 2 != 0 {
+        return Err("hex pattern must have even length (each byte is 2 hex chars)".into());
+    }
     let pattern: Vec<u8> = (0..pattern_hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&pattern_hex[i..i + 2], 16))
@@ -648,5 +651,20 @@ mod tests {
         // Only 10 bytes remain (10_485_760 - 10_485_750)
         assert_eq!(result["bytes_written"], 10);
         std::fs::remove_file(&output).unwrap();
+    }
+
+    #[test]
+    fn search_rejects_odd_length_hex() {
+        let path = format!("{DATA_DIR}/nps-2010-emails.E01");
+        // "ABC" is 3 chars — odd length, not a valid hex byte sequence
+        let result = handle_ewf_search(&path, "ABC", 10);
+        assert!(result.is_err(), "Odd-length hex should return Err, not panic");
+    }
+
+    #[test]
+    fn search_rejects_empty_hex() {
+        let path = format!("{DATA_DIR}/nps-2010-emails.E01");
+        let result = handle_ewf_search(&path, "", 10);
+        assert!(result.is_err(), "Empty hex should return Err");
     }
 }
