@@ -1521,4 +1521,163 @@ mod tests {
         assert_eq!(header.first_chunk, 0);
         assert_eq!(header.entry_count, 128);
     }
+
+    // -- EWF2 reader tests (synthetic Ex01) --
+
+    /// Build a minimal single-segment Ex01 file with known data.
+    ///
+    /// Layout (EWF2 format):
+    ///   [0..32)           EVF2 file header
+    ///   [32..96)          Section descriptor: DeviceInfo (type 0x01)
+    ///   [96..96+D)        Device info data (UTF-16LE tab-separated)
+    ///   [96+D..96+D+64)   Section descriptor: SectorTable (type 0x04)
+    ///   [+64..+84)        Table header (20 bytes)
+    ///   [+84..+100)       Table entry (16 bytes)
+    ///   [+100..+164)      Section descriptor: SectorData (type 0x03)
+    ///   [+164..+164+C)    Compressed chunk data
+    ///   [+164+C..+228+C)  Section descriptor: Done (type 0x0F)
+    fn build_synthetic_ex01(data: &[u8]) -> NamedTempFile {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+
+        let chunk_size: u32 = 32768;
+        let bytes_per_sector: u32 = 512;
+        let sectors_per_chunk: u32 = chunk_size / bytes_per_sector; // 64
+        let total_sectors: u64 = sectors_per_chunk as u64; // 1 chunk worth
+
+        // Pad data to chunk_size and compress
+        let mut padded = data.to_vec();
+        padded.resize(chunk_size as usize, 0);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&padded).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Build device_info content (UTF-16LE tab-separated text)
+        // Format: "2\nmain\nb\tsc\tts\n512\t64\t64\n\n"
+        let device_info_text = format!(
+            "2\nmain\nb\tsc\tts\n{}\t{}\t{}\n\n",
+            bytes_per_sector, sectors_per_chunk, total_sectors
+        );
+        let device_info_utf16: Vec<u8> = device_info_text
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+
+        let devinfo_data_size = device_info_utf16.len();
+        let table_data_size = 20 + 16; // table header + 1 entry
+
+        // Calculate section offsets
+        let devinfo_desc_off: usize = 32; // after file header
+        let devinfo_data_off: usize = devinfo_desc_off + 64;
+        let table_desc_off: usize = devinfo_data_off + devinfo_data_size;
+        let table_data_off: usize = table_desc_off + 64;
+        let sectors_desc_off: usize = table_data_off + table_data_size;
+        let sectors_data_off: usize = sectors_desc_off + 64;
+        let done_desc_off: usize = sectors_data_off + compressed.len();
+
+        // Helper: build a 64-byte EWF2 section descriptor
+        fn make_v2_desc(
+            section_type: u32, data_size: u64, previous_offset: u64,
+        ) -> [u8; 64] {
+            let mut desc = [0u8; 64];
+            desc[0..4].copy_from_slice(&section_type.to_le_bytes());
+            // data_flags = 0
+            desc[8..16].copy_from_slice(&previous_offset.to_le_bytes());
+            desc[16..24].copy_from_slice(&data_size.to_le_bytes());
+            desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
+            // padding_size = 0, integrity_hash = zeros
+            desc
+        }
+
+        let mut file_data = Vec::new();
+
+        // 1. EVF2 File Header (32 bytes)
+        file_data.extend_from_slice(&ewf2::EVF2_SIGNATURE);
+        file_data.push(2); // major_version
+        file_data.push(1); // minor_version
+        file_data.extend_from_slice(&1u16.to_le_bytes()); // compression = Zlib
+        file_data.extend_from_slice(&1u32.to_le_bytes()); // segment_number = 1
+        file_data.extend_from_slice(&[0u8; 16]); // set_identifier
+        assert_eq!(file_data.len(), 32);
+
+        // 2. DeviceInfo section (type 0x01)
+        file_data.extend_from_slice(&make_v2_desc(
+            0x01, devinfo_data_size as u64, 0,
+        ));
+        file_data.extend_from_slice(&device_info_utf16);
+
+        // 3. SectorTable section (type 0x04)
+        file_data.extend_from_slice(&make_v2_desc(
+            0x04, table_data_size as u64, devinfo_desc_off as u64,
+        ));
+
+        // Table header (20 bytes): first_chunk(u64) + entry_count(u32) + pad(u32) + checksum(u32)
+        let mut tbl_hdr = [0u8; 20];
+        tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk = 0
+        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // entry_count = 1
+        file_data.extend_from_slice(&tbl_hdr);
+
+        // Table entry (16 bytes): chunk_data_offset(u64) + chunk_data_size(u32) + flags(u32)
+        let mut entry = [0u8; 16];
+        entry[0..8].copy_from_slice(&(sectors_data_off as u64).to_le_bytes());
+        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
+        file_data.extend_from_slice(&entry);
+
+        // 4. SectorData section (type 0x03)
+        file_data.extend_from_slice(&make_v2_desc(
+            0x03, compressed.len() as u64, table_desc_off as u64,
+        ));
+        file_data.extend_from_slice(&compressed);
+
+        // 5. Done section (type 0x0F)
+        file_data.extend_from_slice(&make_v2_desc(
+            0x0F, 0, sectors_desc_off as u64,
+        ));
+
+        assert_eq!(file_data.len(), done_desc_off + 64);
+
+        let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
+        tmp.write_all(&file_data).unwrap();
+        tmp.flush().unwrap();
+        tmp
+    }
+
+    #[test]
+    fn ewf_reader_opens_synthetic_ex01() {
+        let data = b"Hello, EWF2 world!";
+        let tmp = build_synthetic_ex01(data);
+        let result = EwfReader::open(tmp.path());
+        assert!(result.is_ok(), "EwfReader should open Ex01: {:?}", result.err());
+        let reader = result.unwrap();
+        assert_eq!(reader.chunk_size(), 32768);
+        assert_eq!(reader.chunk_count(), 1);
+        assert_eq!(reader.total_size(), 32768);
+    }
+
+    #[test]
+    fn ewf_reader_reads_ex01_first_bytes() {
+        let data = b"DEADBEEF_EWF2_TEST";
+        let tmp = build_synthetic_ex01(data);
+        let result = EwfReader::open(tmp.path());
+        assert!(result.is_ok(), "EwfReader should open Ex01: {:?}", result.err());
+        let mut reader = result.unwrap();
+        let mut buf = vec![0u8; data.len()];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, data);
+    }
+
+    #[test]
+    fn ewf_reader_ex01_seek_and_read() {
+        let mut test_data = vec![0u8; 1024];
+        test_data[512..520].copy_from_slice(b"SEEKTEST");
+        let tmp = build_synthetic_ex01(&test_data);
+        let result = EwfReader::open(tmp.path());
+        assert!(result.is_ok(), "EwfReader should open Ex01: {:?}", result.err());
+        let mut reader = result.unwrap();
+        reader.seek(SeekFrom::Start(512)).unwrap();
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"SEEKTEST");
+    }
 }
