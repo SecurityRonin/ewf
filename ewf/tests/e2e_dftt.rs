@@ -343,3 +343,48 @@ fn parse_error2_data_handles_empty() {
     let errors = ewf::parse_error2_data(&data);
     assert!(errors.is_empty());
 }
+
+// ---------- L01 (logical evidence file) support ----------
+
+#[test]
+fn l01_opens_when_extension_is_l01() {
+    // L01 uses the same EWF v1 container format, just a different extension.
+    // Copy a real E01 to a temp dir with .L01 extension and verify it opens.
+    let src = format!("{DATA_DIR}/nps-2010-emails.E01");
+    let tmp = tempfile::tempdir().unwrap();
+    let l01_path = tmp.path().join("evidence.L01");
+    std::fs::copy(&src, &l01_path).unwrap();
+
+    let result = ewf::EwfReader::open(&l01_path);
+    assert!(result.is_ok(), "EwfReader::open should succeed for .L01 files, got: {:?}", result.err());
+    assert_eq!(result.unwrap().total_size(), 10_485_760);
+}
+
+#[test]
+fn l01_opens_lowercase_extension() {
+    let src = format!("{DATA_DIR}/nps-2010-emails.E01");
+    let tmp = tempfile::tempdir().unwrap();
+    let l01_path = tmp.path().join("evidence.l01");
+    std::fs::copy(&src, &l01_path).unwrap();
+
+    let result = ewf::EwfReader::open(&l01_path);
+    assert!(result.is_ok(), "EwfReader::open should succeed for .l01 files, got: {:?}", result.err());
+    assert_eq!(result.unwrap().total_size(), 10_485_760);
+}
+
+#[test]
+fn l01_full_media_md5_matches() {
+    let src = format!("{DATA_DIR}/nps-2010-emails.E01");
+    let tmp = tempfile::tempdir().unwrap();
+    let l01_path = tmp.path().join("evidence.L01");
+    std::fs::copy(&src, &l01_path).unwrap();
+
+    let result = ewf::EwfReader::open(&l01_path);
+    assert!(result.is_ok(), "L01 should open");
+    let mut reader = result.unwrap();
+    assert_eq!(
+        full_media_md5(&mut reader),
+        "7dae50cec8163697415e69fd72387c01",
+        "L01 full-media MD5 should match source E01"
+    );
+}

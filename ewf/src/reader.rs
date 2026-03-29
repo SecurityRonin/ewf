@@ -19,9 +19,12 @@ use crate::types::VerifyResult;
 // Segment file discovery
 // ---------------------------------------------------------------------------
 
-/// Discover all segment files for an E01 image.
+/// Discover all segment files for an EWF image (E01, L01, Ex01, or Lx01).
 ///
-/// Given `image.E01`, finds `image.E02`, ..., `image.E99`, `image.EAA`, ..., `image.EZZ`.
+/// Detects the extension prefix from the input path:
+/// - 3-char (v1): `.E01`..`.EZZ`, `.L01`..`.LZZ`
+/// - 4-char (v2): `.Ex01`..`.EzZZ`, `.Lx01`..`.LzZZ`
+///
 /// Returns paths sorted by expected segment order.
 fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
     let stem = first
@@ -30,17 +33,38 @@ fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
         .ok_or_else(|| EwfError::NoSegments(first.display().to_string()))?;
     let parent = first.parent().unwrap_or_else(|| Path::new("."));
 
-    // Glob for segment extensions: .E01-.E99, .EAA-.EZZ (and lowercase)
-    // We use two patterns to match numeric (.E01) and alpha (.EAA) extensions
+    let ext = first
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("E01");
+
     let escaped_stem = glob::Pattern::escape(stem);
     let parent_str = parent.display();
     let mut paths: Vec<PathBuf> = Vec::new();
-    for pattern in &[
-        format!("{parent_str}/{escaped_stem}.[Ee][0-9][0-9]"),
-        format!("{parent_str}/{escaped_stem}.[Ee][A-Za-z][A-Za-z]"),
-    ] {
-        if let Ok(entries) = glob::glob(pattern) {
-            paths.extend(entries.filter_map(|r| r.ok()));
+
+    if ext.len() == 4 {
+        // EWF2: 4-char extensions like Ex01, Lx01
+        let prefix = ext.chars().next().unwrap().to_ascii_uppercase();
+        let lc = prefix.to_ascii_lowercase();
+        for pattern in &[
+            format!("{parent_str}/{escaped_stem}.[{prefix}{lc}][x-z][0-9][0-9]"),
+            format!("{parent_str}/{escaped_stem}.[{prefix}{lc}][x-z][A-Za-z][A-Za-z]"),
+        ] {
+            if let Ok(entries) = glob::glob(pattern) {
+                paths.extend(entries.filter_map(|r| r.ok()));
+            }
+        }
+    } else {
+        // EWF v1: 3-char extensions like E01, L01
+        let prefix = ext.chars().next().unwrap().to_ascii_uppercase();
+        let lc = prefix.to_ascii_lowercase();
+        for pattern in &[
+            format!("{parent_str}/{escaped_stem}.[{prefix}{lc}][0-9][0-9]"),
+            format!("{parent_str}/{escaped_stem}.[{prefix}{lc}][A-Za-z][A-Za-z]"),
+        ] {
+            if let Ok(entries) = glob::glob(pattern) {
+                paths.extend(entries.filter_map(|r| r.ok()));
+            }
         }
     }
 
