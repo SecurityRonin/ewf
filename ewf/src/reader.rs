@@ -84,6 +84,49 @@ fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
 }
 
 // ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Maximum section data size we'll read into memory (DoS guard).
+const MAX_SECTION_DATA_SIZE: u64 = 1_000_000;
+
+/// Default EWF2 chunk size when device_info is absent or unparseable.
+const DEFAULT_V2_CHUNK_SIZE: u64 = 32768;
+
+/// Validate that segment numbers are sequential (1, 2, 3, ...) and reorder
+/// file handles to match. Shared by both v1 and v2 reader paths.
+fn validate_and_reorder_segments(
+    segments: Vec<File>,
+    segment_numbers: Vec<u32>,
+) -> Result<Vec<File>> {
+    let mut indexed: Vec<(usize, u32)> = segment_numbers
+        .into_iter()
+        .enumerate()
+        .map(|(i, seg)| (i, seg))
+        .collect();
+    indexed.sort_by_key(|&(_, seg)| seg);
+
+    // Validate sequential segment numbers (1, 2, 3, ...)
+    for (expected_pos, &(_, seg_num)) in indexed.iter().enumerate() {
+        let expected = (expected_pos + 1) as u32;
+        if seg_num != expected {
+            return Err(EwfError::SegmentGap {
+                expected,
+                got: seg_num,
+            });
+        }
+    }
+
+    // Reorder file handles to match segment order
+    let mut slots: Vec<Option<File>> = segments.into_iter().map(Some).collect();
+    let mut ordered = Vec::with_capacity(slots.len());
+    for &(idx, _) in &indexed {
+        ordered.push(slots[idx].take().unwrap());
+    }
+    Ok(ordered)
+}
+
+// ---------------------------------------------------------------------------
 // EwfReader - main public API
 // ---------------------------------------------------------------------------
 
@@ -175,33 +218,8 @@ impl EwfReader {
             segments.push(f);
         }
 
-        // Sort by segment number, validate sequential
-        let mut indexed: Vec<(usize, u16)> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (i, h.segment_number))
-            .collect();
-        indexed.sort_by_key(|&(_, seg)| seg);
-
-        let order: Vec<usize> = indexed.iter().map(|&(i, _)| i).collect();
-
-        // Validate sequential segment numbers (1, 2, 3, ...)
-        for (expected_pos, &(_, seg_num)) in indexed.iter().enumerate() {
-            let expected = (expected_pos + 1) as u16;
-            if seg_num != expected {
-                return Err(EwfError::SegmentGap {
-                    expected,
-                    got: seg_num,
-                });
-            }
-        }
-
-        // Reorder the file handles
-        let mut final_segments: Vec<Option<File>> = segments.into_iter().map(Some).collect();
-        let mut ordered_segments = Vec::with_capacity(final_segments.len());
-        for &idx in &order {
-            ordered_segments.push(final_segments[idx].take().unwrap());
-        }
+        let segment_numbers: Vec<u32> = headers.iter().map(|h| h.segment_number as u32).collect();
+        let mut ordered_segments = validate_and_reorder_segments(segments, segment_numbers)?;
 
         // Walk section descriptors in each segment to find volume, table, hash, and digest sections
         let mut chunk_size: u64 = 0;
@@ -347,7 +365,7 @@ impl EwfReader {
                         // Only parse if we haven't already populated metadata.
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
                         let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
-                        if data_size > 0 && data_size < 1_000_000 {
+                        if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut compressed = vec![0u8; data_size as usize];
                             file.read_exact(&mut compressed)?;
@@ -363,7 +381,7 @@ impl EwfReader {
                     "error2" => {
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
                         let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
-                        if data_size > 0 && data_size < 1_000_000 {
+                        if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut buf = vec![0u8; data_size as usize];
                             file.read_exact(&mut buf)?;
@@ -411,31 +429,10 @@ impl EwfReader {
             segments.push(f);
         }
 
-        // Sort by segment number, validate sequential
-        let mut indexed: Vec<(usize, u32)> = v2_headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (i, h.segment_number))
-            .collect();
-        indexed.sort_by_key(|&(_, seg)| seg);
-
-        let order: Vec<usize> = indexed.iter().map(|&(i, _)| i).collect();
-
-        for (expected_pos, &(_, seg_num)) in indexed.iter().enumerate() {
-            let expected = (expected_pos + 1) as u32;
-            if seg_num != expected {
-                return Err(EwfError::Parse(format!(
-                    "EWF2 segment gap: expected {expected}, got {seg_num}"
-                )));
-            }
-        }
-
-        // Reorder file handles
-        let mut final_segments: Vec<Option<File>> = segments.into_iter().map(Some).collect();
-        let mut ordered_segments = Vec::with_capacity(final_segments.len());
-        for &idx in &order {
-            ordered_segments.push(final_segments[idx].take().unwrap());
-        }
+        let mut ordered_segments = validate_and_reorder_segments(
+            segments,
+            v2_headers.iter().map(|h| h.segment_number).collect(),
+        )?;
 
         let mut chunk_size: u64 = 0;
         let mut total_size: u64 = 0;
@@ -467,12 +464,13 @@ impl EwfReader {
                 match desc.section_type {
                     ewf2::Ewf2SectionType::DeviceInfo => {
                         // Parse device_info for media geometry
-                        if desc.data_size > 0 && desc.data_size < 1_000_000 && chunk_size == 0 {
+                        if desc.data_size > 0 && desc.data_size < MAX_SECTION_DATA_SIZE && chunk_size == 0 {
                             let data_offset = desc_offset + desc.descriptor_size as u64;
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut raw = vec![0u8; desc.data_size as usize];
                             file.read_exact(&mut raw)?;
                             parse_ewf2_device_info(&raw, &mut chunk_size, &mut total_size);
+                            log::debug!("parsed v2 device_info: chunk_size={chunk_size}, total_size={total_size}");
                         }
                     }
                     ewf2::Ewf2SectionType::SectorTable => {
@@ -487,6 +485,8 @@ impl EwfReader {
                         file.seek(SeekFrom::Start(entries_offset))?;
                         let mut entries_buf = vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];
                         file.read_exact(&mut entries_buf)?;
+
+                        log::debug!("parsed v2 sector_table: first_chunk={}, entries={entry_count}", tbl_hdr.first_chunk);
 
                         for i in 0..entry_count {
                             let start = i * ewf2::TABLE_ENTRY_SIZE;
@@ -508,6 +508,7 @@ impl EwfReader {
                             let mut hash = [0u8; 16];
                             file.read_exact(&mut hash)?;
                             stored_md5 = Some(hash);
+                            log::debug!("parsed v2 md5_hash section: {:02x?}", hash);
                         }
                     }
                     ewf2::Ewf2SectionType::Done | ewf2::Ewf2SectionType::Next => {
@@ -527,7 +528,7 @@ impl EwfReader {
 
         // Default chunk_size if device_info didn't provide it
         if chunk_size == 0 {
-            chunk_size = 32768; // Standard EWF2 default
+            chunk_size = DEFAULT_V2_CHUNK_SIZE;
         }
         if total_size == 0 {
             total_size = chunks.len() as u64 * chunk_size;

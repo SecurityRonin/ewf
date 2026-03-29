@@ -7,7 +7,7 @@
 //! - O(1) seeking via flat chunk index
 
 mod error;
-pub mod ewf2;
+pub(crate) mod ewf2;
 mod parse;
 mod reader;
 mod sections;

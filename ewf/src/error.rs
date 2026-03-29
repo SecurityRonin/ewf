@@ -23,7 +23,7 @@ pub enum EwfError {
     Decompression(String),
 
     #[error("segment gap: expected segment {expected}, got {got}")]
-    SegmentGap { expected: u16, got: u16 },
+    SegmentGap { expected: u32, got: u32 },
 
     #[error("no segment files found matching: {0}")]
     NoSegments(String),
