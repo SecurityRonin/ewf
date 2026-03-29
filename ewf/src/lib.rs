@@ -2201,6 +2201,51 @@ mod tests {
         );
     }
 
+    // -- last compressed chunk back-fill --
+
+    #[test]
+    fn last_compressed_chunk_has_correct_size() {
+        // Build a 2-chunk image. Chunk 0 gets back-filled from chunk 1's offset.
+        // Chunk 1 (the LAST) must also be back-filled — its size should be
+        // the actual compressed data length, NOT the full chunk_size (32768).
+        let data1 = b"first chunk";
+        let data2 = b"second chunk data";
+        let tmp = build_synthetic_e01_two_chunks(data1, data2);
+        let reader = EwfReader::open(tmp.path()).unwrap();
+
+        assert_eq!(reader.chunk_count(), 2);
+
+        // Both chunks are compressed
+        let c0 = reader.chunk_meta(0);
+        let c1 = reader.chunk_meta(1);
+        assert!(c0.compressed);
+        assert!(c1.compressed);
+
+        // Chunk 0: back-filled by the existing logic (offset of chunk 1 - offset of chunk 0)
+        assert!(c0.size < reader.chunk_size(), "Chunk 0 compressed size should be < chunk_size, got {}", c0.size);
+
+        // Chunk 1 (LAST): this is the bug — without the fix, size == chunk_size (32768).
+        // With the fix, size should be the actual compressed length (a few hundred bytes).
+        assert!(c1.size < reader.chunk_size(),
+            "Last chunk compressed size should be < chunk_size ({}), got {}",
+            reader.chunk_size(), c1.size);
+    }
+
+    #[test]
+    fn single_compressed_chunk_has_correct_size() {
+        // Single-chunk image: the only chunk IS the last chunk.
+        let data = b"solo chunk data";
+        let tmp = build_synthetic_e01(data);
+        let reader = EwfReader::open(tmp.path()).unwrap();
+
+        assert_eq!(reader.chunk_count(), 1);
+        let c0 = reader.chunk_meta(0);
+        assert!(c0.compressed);
+        assert!(c0.size < reader.chunk_size(),
+            "Single compressed chunk size should be < chunk_size ({}), got {}",
+            reader.chunk_size(), c0.size);
+    }
+
     // -- DoS guard: reject absurd table entry_count --
 
     #[test]

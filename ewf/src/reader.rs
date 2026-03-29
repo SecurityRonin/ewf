@@ -269,6 +269,13 @@ impl EwfReader {
             let has_table = descriptors.iter().any(|d| d.section_type == "table");
             let table_type = if has_table { "table" } else { "table2" };
 
+            // Find the sectors section end boundary (for back-filling last chunk size).
+            // Sectors data end = sectors_desc.offset + sectors_desc.section_size.
+            let sectors_data_end: Option<u64> = descriptors
+                .iter()
+                .find(|d| d.section_type == "sectors")
+                .map(|d| d.offset + d.section_size);
+
             for desc in &descriptors {
                 match desc.section_type.as_str() {
                     "volume" | "disk" => {
@@ -337,6 +344,20 @@ impl EwfReader {
                             });
 
                             prev_offset = Some(abs_offset);
+                        }
+
+                        // Back-fill the last compressed chunk's size from the sectors
+                        // section boundary. Without this, the last entry keeps its
+                        // default size (chunk_size), causing over-reads on disk.
+                        if let Some(end) = sectors_data_end {
+                            if let Some(last) = chunks.last_mut() {
+                                if last.compressed && last.size == chunk_size {
+                                    let actual = end.saturating_sub(last.offset);
+                                    if actual > 0 && actual < chunk_size {
+                                        last.size = actual;
+                                    }
+                                }
+                            }
                         }
                     }
                     "hash" => {
@@ -577,6 +598,12 @@ impl EwfReader {
     /// Number of chunks in the image.
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
+    }
+
+    /// Access raw chunk metadata (for testing/diagnostics).
+    #[cfg(test)]
+    pub(crate) fn chunk_meta(&self, idx: usize) -> &Chunk {
+        &self.chunks[idx]
     }
 
     /// Returns the integrity hashes stored within the EWF image by the acquisition tool.
