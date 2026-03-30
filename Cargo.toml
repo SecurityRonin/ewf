@@ -1,3 +1,3 @@
 [workspace]
-members = ["ewf", "ewf-mcp"]
+members = ["ewf", "ewf-cli"]
 resolver = "2"

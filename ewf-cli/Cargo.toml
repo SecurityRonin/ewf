@@ -1,0 +1,34 @@
+[package]
+name = "ewf-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "CLI and MCP server for EWF (E01) forensic disk image inspection"
+license = "MIT"
+repository = "https://github.com/SecurityRonin/ewf"
+authors = ["Albert Hui"]
+keywords = ["forensics", "ewf", "e01", "encase", "disk-image"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ewf"
+path = "src/main.rs"
+
+[dependencies]
+ewf = { version = "0.1.1", path = "../ewf" }
+clap = { version = "4", features = ["derive"] }
+glob = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[package.metadata.deb]
+maintainer = "SecurityRonin <security-ronin@users.noreply.github.com>"
+section = "utils"
+priority = "optional"
+extended-description = """\
+ewf is a CLI tool and MCP server for inspecting EWF (E01) forensic disk images. \
+Commands: info, verify, read, sections, search, extract. \
+The mcp subcommand starts a JSON-RPC stdio server for AI-assisted forensic analysis."""
+assets = [
+    ["target/release/ewf", "usr/bin/", "755"],
+]

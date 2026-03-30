@@ -6,9 +6,81 @@
 [![CI](https://github.com/SecurityRonin/ewf/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/ewf/actions)
 [![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
 
-Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images. Zero GPL dependencies.
+Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images. Zero GPL dependencies. Includes a CLI and MCP server for AI-assisted forensic analysis.
 
-## Quick start
+## Install
+
+### CLI (pre-built binary)
+
+```bash
+# macOS (Homebrew)
+brew install SecurityRonin/tap/ewf
+
+# macOS / Linux (install script)
+curl -sSL https://raw.githubusercontent.com/SecurityRonin/ewf/main/install.sh | bash
+
+# Windows (winget)
+winget install SecurityRonin.ewf
+
+# Debian / Ubuntu
+sudo dpkg -i ewf-cli_*.deb
+
+# From source (requires Rust)
+cargo install ewf-cli
+```
+
+### Rust library
+
+```toml
+[dependencies]
+ewf = "0.1"
+```
+
+## CLI usage
+
+```bash
+ewf info image.E01              # Metadata, hashes, case info
+ewf verify image.E01            # Full-media MD5/SHA-1 verification
+ewf read image.E01 -o 510 -l 16 # Hex dump at offset
+ewf sections image.E01          # List internal EWF sections
+ewf search image.E01 55aa       # Search for byte pattern
+ewf extract image.E01 -o 0 -l 512 -O mbr.bin  # Extract bytes to file
+ewf info image.E01 --json       # JSON output for scripting
+```
+
+## MCP server
+
+The `ewf mcp` subcommand starts an [MCP](https://modelcontextprotocol.io/) server for AI-assisted forensic image inspection over JSON-RPC stdio.
+
+| Tool | Description |
+|------|-------------|
+| `ewf_info` | Image metadata, geometry, stored hashes, acquisition errors |
+| `ewf_verify` | Full-media hash verification (MD5 + SHA-1) |
+| `ewf_read_sectors` | Read hex bytes at any offset |
+| `ewf_list_sections` | List all section descriptors across segments |
+| `ewf_search` | Byte-pattern search with hex input |
+| `ewf_extract` | Extract byte range to file |
+
+### Register with Claude Code
+
+```bash
+claude mcp add ewf -- ewf mcp
+```
+
+### Claude Desktop configuration
+
+```json
+{
+  "mcpServers": {
+    "ewf": {
+      "command": "ewf",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+## Library quick start
 
 ```rust
 use std::io::{Read, Seek, SeekFrom};
@@ -25,14 +97,7 @@ reader.seek(SeekFrom::Start(1_048_576))?;
 
 `EwfReader` implements `Read + Seek`, so it plugs directly into crates like [`ntfs`](https://crates.io/crates/ntfs), [`fatfs`](https://crates.io/crates/fatfs), or anything expecting a seekable stream.
 
-## Install
-
-```toml
-[dependencies]
-ewf = "0.1"
-```
-
-## Features
+## Library features
 
 - **EWF v1 format** — reads images from EnCase, FTK Imager, Guymager, ewfacquire, etc.
 - **EWF v2 format (Ex01/Lx01)** — reads EnCase 7+ images with format auto-detection
@@ -48,15 +113,7 @@ ewf = "0.1"
 - **DoS-safe** — guards against malformed images with absurd table entry counts
 - **MIT licensed** — no GPL, safe for proprietary DFIR tooling
 
-## Usage
-
-### Open with auto-discovery
-
-```rust
-// Finds all .E01/.E02/... segments automatically
-let mut reader = ewf::EwfReader::open("case001.E01")?;
-println!("Image size: {} bytes", reader.total_size());
-```
+## Library API examples
 
 ### Verify image integrity
 
@@ -95,18 +152,6 @@ if let Some(md5) = hashes.md5 {
 let mut reader = ewf::EwfReader::open_with_cache_size("case001.E01", 1000)?;
 ```
 
-### Explicit segment paths
-
-```rust
-use std::path::PathBuf;
-
-let segments = vec![
-    PathBuf::from("case001.E01"),
-    PathBuf::from("case001.E02"),
-];
-let mut reader = ewf::EwfReader::open_segments(&segments)?;
-```
-
 ### With the ntfs crate
 
 ```rust
@@ -141,38 +186,6 @@ ewf = { version = "0.1", default-features = false }
 | L01 (logical evidence, v1) | Supported |
 | Lx01 (logical evidence, v2) | Supported |
 | S01 (SMART) | Not yet |
-
-## MCP server
-
-The workspace includes `ewf-mcp`, an [MCP](https://modelcontextprotocol.io/) server for AI-assisted forensic image inspection. It exposes six tools over JSON-RPC stdio:
-
-| Tool | Description |
-|------|-------------|
-| `ewf_info` | Image metadata, geometry, stored hashes, acquisition errors |
-| `ewf_verify` | Full-media hash verification (MD5 + SHA-1) |
-| `ewf_read` | Read hex bytes at any offset |
-| `ewf_list_sections` | List all section descriptors across segments |
-| `ewf_search` | Byte-pattern search with hex input |
-| `ewf_extract` | Extract byte range to file |
-
-### Run the MCP server
-
-```bash
-cargo build --release -p ewf-mcp
-./target/release/ewf-mcp
-```
-
-### Claude Desktop configuration
-
-```json
-{
-  "mcpServers": {
-    "ewf": {
-      "command": "/path/to/ewf-mcp"
-    }
-  }
-}
-```
 
 ## Validation
 
