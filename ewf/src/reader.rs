@@ -211,7 +211,7 @@ impl EwfReader {
         }
 
         // EWF v1 path
-        // Open all segment files
+        // Open all segment files and parse file headers
         let mut segments = Vec::with_capacity(paths.len());
         let mut headers = Vec::with_capacity(paths.len());
         for path in paths {
@@ -225,7 +225,7 @@ impl EwfReader {
         let segment_numbers: Vec<u32> = headers.iter().map(|h| h.segment_number as u32).collect();
         let mut ordered_segments = validate_and_reorder_segments(segments, segment_numbers)?;
 
-        // Walk section descriptors in each segment to find volume, table, hash, and digest sections
+        // Walk section descriptors in each segment
         let mut chunk_size: u64 = 0;
         let mut total_size: u64 = 0;
         let mut chunks: Vec<Chunk> = Vec::new();
@@ -235,23 +235,16 @@ impl EwfReader {
         let mut acquisition_errors: Vec<AcquisitionError> = Vec::new();
 
         for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
-            // First section descriptor starts at offset 13 (right after file header)
             let mut desc_offset: u64 = FILE_HEADER_SIZE as u64;
-            // Collect section descriptors for this segment, then process.
-            // This lets us prefer "table" over "table2" without losing multi-table support.
             let mut descriptors = Vec::new();
 
             let file_len = file.seek(SeekFrom::End(0))?;
             loop {
-                // If next descriptor offset is past EOF, stop gracefully
-                // (handles truncated files and images without a trailing "done" section)
-                let past_eof = desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len;
-                if past_eof {
+                if desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len {
                     log::debug!("truncated chain at {desc_offset}, EOF {file_len}");
                     break;
                 }
 
-                // Read section descriptor
                 file.seek(SeekFrom::Start(desc_offset))?;
                 let mut desc_buf = [0u8; SECTION_DESCRIPTOR_SIZE];
                 file.read_exact(&mut desc_buf)?;
@@ -265,12 +258,11 @@ impl EwfReader {
                 desc_offset = next;
             }
 
-            // Determine which table type to use: prefer "table", fall back to "table2"
+            // Prefer "table" over "table2"
             let has_table = descriptors.iter().any(|d| d.section_type == "table");
             let table_type = if has_table { "table" } else { "table2" };
 
-            // Find the sectors section end boundary (for back-filling last chunk size).
-            // Sectors data end = sectors_desc.offset + sectors_desc.section_size.
+            // Find sectors section end boundary for last-chunk back-fill
             let sectors_data_end: Option<u64> = descriptors
                 .iter()
                 .find(|d| d.section_type == "sectors")
@@ -279,7 +271,6 @@ impl EwfReader {
             for desc in &descriptors {
                 match desc.section_type.as_str() {
                     "volume" | "disk" => {
-                        // Read volume data right after the descriptor
                         let mut vol_buf = [0u8; 94];
                         file.seek(SeekFrom::Start(
                             desc.offset + SECTION_DESCRIPTOR_SIZE as u64,
@@ -294,7 +285,6 @@ impl EwfReader {
                         chunks.reserve(vol.chunk_count as usize);
                     }
                     t if t == table_type => {
-                        // Read table header (24 bytes after descriptor)
                         let desc_offset = desc.offset;
                         file.seek(SeekFrom::Start(
                             desc_offset + SECTION_DESCRIPTOR_SIZE as u64,
@@ -302,7 +292,6 @@ impl EwfReader {
                         let mut tbl_hdr = [0u8; 24];
                         file.read_exact(&mut tbl_hdr)?;
 
-                        // EWF v1 table header: u32 entry_count + 4 padding + u64 base_offset
                         let entry_count =
                             u32::from_le_bytes(tbl_hdr[0..4].try_into().unwrap()) as usize;
                         if entry_count > MAX_TABLE_ENTRIES {
@@ -312,19 +301,16 @@ impl EwfReader {
                         }
                         let base_offset = u64::from_le_bytes(tbl_hdr[8..16].try_into().unwrap());
 
-                        // Read all table entries at once
                         let entries_offset = desc_offset + SECTION_DESCRIPTOR_SIZE as u64 + 24;
                         file.seek(SeekFrom::Start(entries_offset))?;
                         let mut entries_buf = vec![0u8; entry_count * 4];
                         file.read_exact(&mut entries_buf)?;
 
-                        // Parse entries and build chunk metadata
                         let mut prev_offset: Option<u64> = None;
                         for i in 0..entry_count {
                             let entry = TableEntry::parse(&entries_buf[i * 4..(i + 1) * 4])?;
                             let abs_offset = entry.chunk_offset as u64 + base_offset;
 
-                            // Compute previous chunk's compressed size
                             if let Some(po) = prev_offset {
                                 if let Some(prev_chunk) = chunks.last_mut() {
                                     if prev_chunk.compressed {
@@ -340,15 +326,13 @@ impl EwfReader {
                                 segment_idx: seg_idx,
                                 compressed: entry.compressed,
                                 offset: abs_offset,
-                                size: chunk_size, // default; overwritten for compressed
+                                size: chunk_size,
                             });
 
                             prev_offset = Some(abs_offset);
                         }
 
-                        // Back-fill the last compressed chunk's size from the sectors
-                        // section boundary. Without this, the last entry keeps its
-                        // default size (chunk_size), causing over-reads on disk.
+                        // Back-fill last compressed chunk from sectors boundary
                         if let Some(end) = sectors_data_end {
                             if let Some(last) = chunks.last_mut() {
                                 if last.compressed && last.size == chunk_size {
@@ -361,21 +345,16 @@ impl EwfReader {
                         }
                     }
                     "hash" => {
-                        // EWF v1 hash section: 16B MD5 + 16B padding + 4B Adler-32 = 36 bytes
-                        // Located after the 76-byte section descriptor.
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
                         file.seek(SeekFrom::Start(data_offset))?;
                         let mut hash_buf = [0u8; 16];
                         file.read_exact(&mut hash_buf)?;
-                        // Only set if we haven't already gotten MD5 from a digest section
                         if stored_md5.is_none() {
                             stored_md5 = Some(hash_buf);
                         }
                         log::debug!("parsed hash section: MD5 = {:02x?}", hash_buf);
                     }
                     "digest" => {
-                        // EWF v1 digest section: 16B MD5 + 20B SHA-1 + 40B padding + 4B Adler-32 = 80 bytes
-                        // Added in EnCase 6.12+. Located after the 76-byte section descriptor.
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
                         file.seek(SeekFrom::Start(data_offset))?;
                         let mut digest_buf = [0u8; 36];
@@ -384,15 +363,11 @@ impl EwfReader {
                         let mut sha1 = [0u8; 20];
                         md5.copy_from_slice(&digest_buf[0..16]);
                         sha1.copy_from_slice(&digest_buf[16..36]);
-                        // Digest section is authoritative — overwrite hash section MD5
                         stored_md5 = Some(md5);
                         stored_sha1 = Some(sha1);
                         log::debug!("parsed digest section: MD5 = {:02x?}, SHA-1 = {:02x?}", md5, sha1);
                     }
                     "header" if metadata.case_number.is_none() && metadata.os_version.is_none() => {
-                        // EWF v1 header: zlib-compressed ASCII, tab-delimited.
-                        // Format: version\r\n, "main"\r\n, field_names\r\n, field_values\r\n
-                        // Only parse if we haven't already populated metadata.
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
                         let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
                         if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
@@ -419,9 +394,7 @@ impl EwfReader {
                             log::debug!("parsed error2 section: {} entries", acquisition_errors.len());
                         }
                     }
-                    _ => {
-                        // Skip header2, sectors, done, etc.
-                    }
+                    _ => {}
                 }
             }
         }
