@@ -82,7 +82,7 @@ impl SectionDescriptor {
                 got: buf.len(),
             });
         }
-        // Type: 16 bytes, NUL-terminated
+        // Type: 16 bytes, NUL-terminated ASCII
         let type_end = buf[..16].iter().position(|&b| b == 0).unwrap_or(16);
         let section_type = String::from_utf8_lossy(&buf[..type_end]).into_owned();
         let next = u64::from_le_bytes(buf[16..24].try_into().unwrap());
