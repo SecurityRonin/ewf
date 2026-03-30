@@ -694,25 +694,19 @@ impl EwfReader {
 
     /// Read and decompress a single chunk by its index.
     fn read_chunk(&mut self, chunk_id: usize) -> Result<Vec<u8>> {
-        // Check cache
         if let Some(cached) = self.cache.get(&chunk_id) {
             return Ok(cached.clone());
         }
 
         let mut page = vec![0u8; self.chunk_size as usize];
-
-        // chunk_id is always in range: read_at() guards against out-of-range offsets
-        // before calling read_chunk(), so this index is safe.
         let chunk = self.chunks[chunk_id].clone();
         let file = &mut self.segments[chunk.segment_idx];
 
         if !chunk.compressed {
-            // Raw read
             file.seek(SeekFrom::Start(chunk.offset))?;
             let to_read = std::cmp::min(chunk.size as usize, page.len());
             file.read_exact(&mut page[..to_read])?;
         } else {
-            // Read compressed data (may be shorter than chunk.size for last chunk)
             let mut compressed = vec![0u8; chunk.size as usize];
             file.seek(SeekFrom::Start(chunk.offset))?;
             let mut total_read = 0;
@@ -725,7 +719,6 @@ impl EwfReader {
             }
             let compressed = &compressed[..total_read];
 
-            // zlib decompress
             let mut decoder = ZlibDecoder::new(compressed);
             let mut total = 0;
             loop {
@@ -739,7 +732,6 @@ impl EwfReader {
             }
         }
 
-        // Cache the result
         self.cache.put(chunk_id, page.clone());
         Ok(page)
     }
