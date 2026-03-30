@@ -198,7 +198,6 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
     use std::io::{Read, Seek, SeekFrom};
     use std::path::Path;
 
-    // Discover segment files using glob (same pattern as ewf crate internals).
     let first = Path::new(path);
     let stem = first.file_stem().and_then(|s| s.to_str())
         .ok_or_else(|| format!("cannot extract stem from: {path}"))?;
@@ -229,7 +228,7 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
     for (seg_idx, seg_path) in seg_paths.iter().enumerate() {
         let mut file = std::fs::File::open(seg_path).map_err(|e| format!("{e}"))?;
         let file_len = file.seek(SeekFrom::End(0)).map_err(|e| format!("{e}"))?;
-        let mut offset: u64 = 13; // skip 13-byte file header
+        let mut offset: u64 = 13;
 
         loop {
             if offset + 76 > file_len {
@@ -260,7 +259,6 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
 pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> Result<Value, String> {
     use std::io::{Read, Seek, SeekFrom};
 
-    // Parse hex pattern
     if pattern_hex.len() % 2 != 0 {
         return Err("hex pattern must have even length (each byte is 2 hex chars)".into());
     }
@@ -279,10 +277,10 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
     reader.seek(SeekFrom::Start(0)).map_err(|e| format!("{e}"))?;
 
     let mut matches = Vec::new();
-    let buf_size = 64 * 1024; // 64 KB read buffer
-    let mut buf = vec![0u8; buf_size + pattern.len() - 1]; // overlap for cross-boundary matches
+    let buf_size = 64 * 1024;
+    let mut buf = vec![0u8; buf_size + pattern.len() - 1];
     let mut file_offset: u64 = 0;
-    let mut carry = 0usize; // bytes carried over from previous read
+    let mut carry = 0usize;
 
     while file_offset < total && matches.len() < max_results {
         let to_read = buf_size.min((total - file_offset) as usize);
@@ -292,7 +290,6 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
         }
         let search_len = carry + n;
 
-        // Search for pattern in buffer
         let end = if search_len >= pattern.len() { search_len - pattern.len() + 1 } else { 0 };
         for i in 0..end {
             if buf[i..i + pattern.len()] == pattern[..] {
@@ -304,7 +301,6 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
             }
         }
 
-        // Carry over the tail for cross-boundary matching
         if pattern.len() > 1 && search_len >= pattern.len() - 1 {
             let overlap = pattern.len() - 1;
             buf.copy_within(search_len - overlap..search_len, 0);
