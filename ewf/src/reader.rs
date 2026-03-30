@@ -73,7 +73,7 @@ fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
         return Err(EwfError::NoSegments(first.display().to_string()));
     }
 
-    // Sort by extension to get natural segment order (E01 < E02 < ... < E99 < EAA < ... < EZZ)
+    // Sort by extension for natural segment order
     paths.sort_by(|a, b| {
         let ext_a = a.extension().and_then(|e| e.to_str()).unwrap_or("");
         let ext_b = b.extension().and_then(|e| e.to_str()).unwrap_or("");
