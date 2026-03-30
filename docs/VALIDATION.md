@@ -8,7 +8,7 @@ Every byte of decompressed media is hashed and compared — not sampled.
 
 | Component | Version | Source |
 |-----------|---------|--------|
-| ewf crate | 0.1.0 | [crates.io](https://crates.io/crates/ewf) |
+| ewf crate | 0.1.1 | [crates.io](https://crates.io/crates/ewf) |
 | [libewf](https://github.com/libyal/libewf) (ewfexport) | 20231119 | Homebrew (`brew install libewf`) |
 | [The Sleuth Kit](https://github.com/sleuthkit/sleuthkit) (img_cat) | 4.12.1 | Homebrew (`brew install sleuthkit`) |
 | Rust (rustc) | 1.88.0 (6b00bc388) | [rustup.rs](https://rustup.rs/) |

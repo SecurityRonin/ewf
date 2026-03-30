@@ -2,9 +2,13 @@
 //!
 //! Provides a `Read + Seek` interface over E01 images, supporting:
 //! - EWF v1 format (`.E01` files produced by EnCase, FTK Imager, etc.)
-//! - Multi-segment images (`.E01`, `.E02`, ..., `.E99`, `.EAA`, ..., `.EZZ`)
+//! - EWF v2 format (`.Ex01`/`.Lx01` from EnCase 7+) with auto-detection
+//! - L01 logical evidence files
+//! - Multi-segment images (`.E01`-`.EZZ` for v1, `.Ex01`-`.EzZZ` for v2)
 //! - zlib-compressed chunks with LRU caching
 //! - O(1) seeking via flat chunk index
+//! - Hash verification (`verify()`) with MD5 and SHA-1
+//! - Case metadata, stored hashes, and acquisition error parsing
 
 mod error;
 pub(crate) mod ewf2;
