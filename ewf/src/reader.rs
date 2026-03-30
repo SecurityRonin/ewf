@@ -657,7 +657,6 @@ impl EwfReader {
             None
         };
 
-        // Stream all media data through the hashers
         self.position = 0;
         let mut buf = vec![0u8; self.chunk_size as usize];
         let mut remaining = self.total_size;
