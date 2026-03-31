@@ -4,6 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/ewf)](https://docs.rs/ewf)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/SecurityRonin/ewf/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/ewf/actions)
+[![Coverage](https://img.shields.io/badge/coverage-99.86%25-brightgreen)](docs/VALIDATION.md)
 [![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
 
 Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images. Zero GPL dependencies. Includes a CLI and MCP server for AI-assisted forensic analysis.
@@ -33,7 +34,7 @@ cargo install ewf-cli
 
 ```toml
 [dependencies]
-ewf = "0.1"
+ewf = "0.2"
 ```
 
 ## CLI usage
@@ -173,7 +174,7 @@ To disable hash verification and reduce dependencies:
 
 ```toml
 [dependencies]
-ewf = { version = "0.1", default-features = false }
+ewf = { version = "0.2", default-features = false }
 ```
 
 ## Format support
@@ -187,9 +188,14 @@ ewf = { version = "0.1", default-features = false }
 | Lx01 (logical evidence, v2) | Supported |
 | S01 (SMART) | Not yet |
 
-## Validation
+## Testing
 
-Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 6 public forensic images (303+ GiB of media). Test images sourced from [Digital Corpora](https://digitalcorpora.org/) and [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano). Three small images are committed as test fixtures and run in CI. See [docs/VALIDATION.md](docs/VALIDATION.md) for results, image sources, and reproduction steps.
+- **127 tests** (92 unit + 27 e2e + 8 validation) with **99.86% line coverage** (694/695 lines)
+- Full-media MD5 comparison against libewf and The Sleuth Kit confirms bit-identical output across 6 public forensic images (303+ GiB of media)
+- Test images sourced from [Digital Corpora](https://digitalcorpora.org/) and [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano)
+- Three small images are committed as test fixtures and run in CI
+
+See [docs/VALIDATION.md](docs/VALIDATION.md) for detailed results, image sources, and reproduction steps.
 
 ## Acknowledgments
 
