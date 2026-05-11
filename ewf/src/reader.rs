@@ -94,6 +94,12 @@ const MAX_SECTION_DATA_SIZE: u64 = 1_000_000;
 /// 4M entries × 32 KB chunks = 128 TB image — far beyond any real forensic image.
 const MAX_TABLE_ENTRIES: usize = 4_000_000;
 
+/// Maximum chunk size in bytes. EWF typically uses 32 KB; 128 MB is a generous cap.
+const MAX_CHUNK_SIZE: u64 = 128 * 1024 * 1024;
+
+/// Maximum chunk count from the volume header. Reuses the table entry cap.
+const MAX_CHUNK_COUNT: usize = MAX_TABLE_ENTRIES;
+
 /// Default EWF2 chunk size when device_info is absent or unparseable.
 const DEFAULT_V2_CHUNK_SIZE: u64 = 32768;
 
@@ -240,7 +246,12 @@ impl EwfReader {
 
             let file_len = file.seek(SeekFrom::End(0))?;
             loop {
-                if desc_offset + SECTION_DESCRIPTOR_SIZE as u64 > file_len {
+                // Use checked_add: desc_offset = u64::MAX would overflow without it.
+                let chain_end = match desc_offset.checked_add(SECTION_DESCRIPTOR_SIZE as u64) {
+                    Some(e) => e,
+                    None => break, // offset overflows — treat as truncated chain
+                };
+                if chain_end > file_len {
                     log::debug!("truncated chain at {desc_offset}, EOF {file_len}");
                     break;
                 }
@@ -262,11 +273,12 @@ impl EwfReader {
             let has_table = descriptors.iter().any(|d| d.section_type == "table");
             let table_type = if has_table { "table" } else { "table2" };
 
-            // Find sectors section end boundary for last-chunk back-fill
+            // Find sectors section end boundary for last-chunk back-fill.
+            // Use saturating_add: a crafted section_size = u64::MAX would overflow otherwise.
             let sectors_data_end: Option<u64> = descriptors
                 .iter()
                 .find(|d| d.section_type == "sectors")
-                .map(|d| d.offset + d.section_size);
+                .map(|d| d.offset.saturating_add(d.section_size));
 
             for desc in &descriptors {
                 match desc.section_type.as_str() {
@@ -277,7 +289,17 @@ impl EwfReader {
                         ))?;
                         file.read_exact(&mut vol_buf)?;
                         let vol = EwfVolume::parse(&vol_buf)?;
-                        chunk_size = vol.chunk_size();
+                        let cs = vol.chunk_size();
+                        if cs > MAX_CHUNK_SIZE {
+                            return Err(EwfError::InvalidChunkSize(cs.min(u32::MAX as u64) as u32));
+                        }
+                        if vol.chunk_count as usize > MAX_CHUNK_COUNT {
+                            return Err(EwfError::Parse(format!(
+                                "volume chunk_count {} exceeds maximum {MAX_CHUNK_COUNT}",
+                                vol.chunk_count
+                            )));
+                        }
+                        chunk_size = cs;
                         total_size = vol.total_size();
                         if total_size == 0 {
                             total_size = chunk_size * vol.chunk_count as u64;
