@@ -174,7 +174,9 @@ fn exfat1_stored_md5_matches_media_hash() {
     let path = format!("{DATA_DIR}/exfat1.E01");
     let reader = ewf::EwfReader::open(&path).unwrap();
     let hashes = reader.stored_hashes();
-    let md5 = hashes.md5.expect("EnCase 6 image should contain stored MD5");
+    let md5 = hashes
+        .md5
+        .expect("EnCase 6 image should contain stored MD5");
     assert_eq!(
         hex(&md5),
         "0777ee90c27ed5ff5868af2015bed635",
@@ -188,7 +190,9 @@ fn emails_stored_md5_matches_media_hash() {
     let path = format!("{DATA_DIR}/nps-2010-emails.E01");
     let reader = ewf::EwfReader::open(&path).unwrap();
     let hashes = reader.stored_hashes();
-    let md5 = hashes.md5.expect("EnCase 6 image should contain stored MD5");
+    let md5 = hashes
+        .md5
+        .expect("EnCase 6 image should contain stored MD5");
     assert_eq!(
         hex(&md5),
         "7dae50cec8163697415e69fd72387c01",
@@ -213,7 +217,10 @@ fn exfat1_verify_passes() {
     let path = format!("{DATA_DIR}/exfat1.E01");
     let mut reader = ewf::EwfReader::open(&path).unwrap();
     let result = reader.verify().unwrap();
-    assert!(result.md5_match.unwrap(), "MD5 verification should pass for intact image");
+    assert!(
+        result.md5_match.unwrap(),
+        "MD5 verification should pass for intact image"
+    );
 }
 
 #[test]
@@ -221,7 +228,10 @@ fn emails_verify_passes() {
     let path = format!("{DATA_DIR}/nps-2010-emails.E01");
     let mut reader = ewf::EwfReader::open(&path).unwrap();
     let result = reader.verify().unwrap();
-    assert!(result.md5_match.unwrap(), "MD5 verification should pass for intact image");
+    assert!(
+        result.md5_match.unwrap(),
+        "MD5 verification should pass for intact image"
+    );
 }
 
 #[test]
@@ -232,7 +242,10 @@ fn verify_returns_none_when_no_stored_hashes() {
     let mut reader = ewf::EwfReader::open(&path).unwrap();
     let result = reader.verify().unwrap();
     if reader.stored_hashes().md5.is_none() {
-        assert!(result.md5_match.is_none(), "No stored MD5 means md5_match should be None");
+        assert!(
+            result.md5_match.is_none(),
+            "No stored MD5 means md5_match should be None"
+        );
     }
 }
 
@@ -261,7 +274,10 @@ fn mmls1_metadata_has_case_info() {
     assert_eq!(meta.evidence_number.as_deref(), Some("1"));
     assert_eq!(meta.description.as_deref(), Some("Test E01 for sleuthkit"));
     assert_eq!(meta.examiner.as_deref(), Some("Rishwanth"));
-    assert_eq!(meta.notes.as_deref(), Some("Used to test sleuthkit libraries"));
+    assert_eq!(
+        meta.notes.as_deref(),
+        Some("Used to test sleuthkit libraries")
+    );
 }
 
 #[test]
@@ -297,7 +313,11 @@ fn emails_metadata_parses_without_panic() {
 #[test]
 fn clean_image_has_no_acquisition_errors() {
     // All our test images had clean acquisitions — no read errors.
-    for name in ["exfat1.E01", "imageformat_mmls_1.E01", "nps-2010-emails.E01"] {
+    for name in [
+        "exfat1.E01",
+        "imageformat_mmls_1.E01",
+        "nps-2010-emails.E01",
+    ] {
         let path = format!("{DATA_DIR}/{name}");
         let reader = ewf::EwfReader::open(&path).unwrap();
         assert!(
@@ -356,7 +376,11 @@ fn l01_opens_when_extension_is_l01() {
     std::fs::copy(&src, &l01_path).unwrap();
 
     let result = ewf::EwfReader::open(&l01_path);
-    assert!(result.is_ok(), "EwfReader::open should succeed for .L01 files, got: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "EwfReader::open should succeed for .L01 files, got: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap().total_size(), 10_485_760);
 }
 
@@ -368,7 +392,11 @@ fn l01_opens_lowercase_extension() {
     std::fs::copy(&src, &l01_path).unwrap();
 
     let result = ewf::EwfReader::open(&l01_path);
-    assert!(result.is_ok(), "EwfReader::open should succeed for .l01 files, got: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "EwfReader::open should succeed for .l01 files, got: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap().total_size(), 10_485_760);
 }
 

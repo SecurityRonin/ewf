@@ -21,10 +21,10 @@ mod types;
 pub use error::{EwfError, Result};
 pub use parse::parse_error2_data;
 pub use reader::EwfReader;
-pub use sections::{EVF_SIGNATURE, EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry};
-pub use types::{AcquisitionError, EwfMetadata, StoredHashes};
+pub use sections::{EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry, EVF_SIGNATURE};
 #[cfg(feature = "verify")]
 pub use types::VerifyResult;
+pub use types::{AcquisitionError, EwfMetadata, StoredHashes};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1400,7 +1400,11 @@ mod tests {
 
     fn make_ewf2_file_header(is_physical: bool, segment: u32, compression: u16) -> [u8; 32] {
         let mut buf = [0u8; 32];
-        let sig = if is_physical { ewf2::EVF2_SIGNATURE } else { ewf2::LEF2_SIGNATURE };
+        let sig = if is_physical {
+            ewf2::EVF2_SIGNATURE
+        } else {
+            ewf2::LEF2_SIGNATURE
+        };
         buf[0..8].copy_from_slice(&sig);
         buf[8] = 0x02;
         buf[9] = 0x01;
@@ -1443,7 +1447,10 @@ mod tests {
     }
 
     fn make_ewf2_section_descriptor(
-        section_type: u32, data_flags: u32, prev_offset: u64, data_size: u64,
+        section_type: u32,
+        data_flags: u32,
+        prev_offset: u64,
+        data_size: u64,
     ) -> [u8; 64] {
         let mut buf = [0u8; 64];
         buf[0..4].copy_from_slice(&section_type.to_le_bytes());
@@ -1580,16 +1587,14 @@ mod tests {
         let done_desc_off: usize = sectors_data_off + compressed.len();
 
         // Helper: build a 64-byte EWF2 section descriptor
-        fn make_v2_desc(
-            section_type: u32, data_size: u64, previous_offset: u64,
-        ) -> [u8; 64] {
+        fn make_v2_desc(section_type: u32, data_size: u64, previous_offset: u64) -> [u8; 64] {
             let mut desc = [0u8; 64];
             desc[0..4].copy_from_slice(&section_type.to_le_bytes());
             // data_flags = 0
             desc[8..16].copy_from_slice(&previous_offset.to_le_bytes());
             desc[16..24].copy_from_slice(&data_size.to_le_bytes());
             desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
-            // padding_size = 0, integrity_hash = zeros
+                                                                // padding_size = 0, integrity_hash = zeros
             desc
         }
 
@@ -1605,14 +1610,14 @@ mod tests {
         assert_eq!(file_data.len(), 32);
 
         // 2. DeviceInfo section (type 0x01)
-        file_data.extend_from_slice(&make_v2_desc(
-            0x01, devinfo_data_size as u64, 0,
-        ));
+        file_data.extend_from_slice(&make_v2_desc(0x01, devinfo_data_size as u64, 0));
         file_data.extend_from_slice(&device_info_utf16);
 
         // 3. SectorTable section (type 0x04)
         file_data.extend_from_slice(&make_v2_desc(
-            0x04, table_data_size as u64, devinfo_desc_off as u64,
+            0x04,
+            table_data_size as u64,
+            devinfo_desc_off as u64,
         ));
 
         // Table header (20 bytes): first_chunk(u64) + entry_count(u32) + pad(u32) + checksum(u32)
@@ -1630,14 +1635,14 @@ mod tests {
 
         // 4. SectorData section (type 0x03)
         file_data.extend_from_slice(&make_v2_desc(
-            0x03, compressed.len() as u64, table_desc_off as u64,
+            0x03,
+            compressed.len() as u64,
+            table_desc_off as u64,
         ));
         file_data.extend_from_slice(&compressed);
 
         // 5. Done section (type 0x0F)
-        file_data.extend_from_slice(&make_v2_desc(
-            0x0F, 0, sectors_desc_off as u64,
-        ));
+        file_data.extend_from_slice(&make_v2_desc(0x0F, 0, sectors_desc_off as u64));
 
         assert_eq!(file_data.len(), done_desc_off + 64);
 
@@ -1666,7 +1671,10 @@ mod tests {
 
     #[test]
     fn ewf2_compression_none_and_unknown() {
-        assert_eq!(ewf2::CompressionMethod::from_u16(0).unwrap(), ewf2::CompressionMethod::None);
+        assert_eq!(
+            ewf2::CompressionMethod::from_u16(0).unwrap(),
+            ewf2::CompressionMethod::None
+        );
         assert!(ewf2::CompressionMethod::from_u16(99).is_err());
     }
 
@@ -1709,7 +1717,8 @@ mod tests {
         let mut file_data = Vec::new();
         // EVF2 header
         file_data.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        file_data.push(2); file_data.push(1);
+        file_data.push(2);
+        file_data.push(1);
         file_data.extend_from_slice(&1u16.to_le_bytes());
         file_data.extend_from_slice(&1u32.to_le_bytes());
         file_data.extend_from_slice(&[0u8; 16]);
@@ -1752,8 +1761,8 @@ mod tests {
 
         // Fake MD5 hash
         let fake_md5: [u8; 16] = [
-            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x07, 0x08,
         ];
 
         fn make_v2_desc(section_type: u32, data_size: u64, prev: u64) -> [u8; 64] {
@@ -1778,7 +1787,8 @@ mod tests {
 
         // Header
         file_data.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        file_data.push(2); file_data.push(1);
+        file_data.push(2);
+        file_data.push(1);
         file_data.extend_from_slice(&1u16.to_le_bytes());
         file_data.extend_from_slice(&1u32.to_le_bytes());
         file_data.extend_from_slice(&[0u8; 16]);
@@ -1795,11 +1805,19 @@ mod tests {
         file_data.extend_from_slice(&entry);
 
         // Md5Hash
-        file_data.extend_from_slice(&make_v2_desc(0x08, md5_data_size as u64, tbl_desc_off as u64));
+        file_data.extend_from_slice(&make_v2_desc(
+            0x08,
+            md5_data_size as u64,
+            tbl_desc_off as u64,
+        ));
         file_data.extend_from_slice(&fake_md5);
 
         // SectorData
-        file_data.extend_from_slice(&make_v2_desc(0x03, compressed.len() as u64, md5_desc_off as u64));
+        file_data.extend_from_slice(&make_v2_desc(
+            0x03,
+            compressed.len() as u64,
+            md5_desc_off as u64,
+        ));
         file_data.extend_from_slice(&compressed);
 
         // Done
@@ -1816,7 +1834,11 @@ mod tests {
     fn ewf2_reader_parses_md5_hash_section() {
         let (tmp, expected_md5) = build_synthetic_ex01_with_md5_no_devinfo(b"md5 test");
         let result = EwfReader::open(tmp.path());
-        assert!(result.is_ok(), "Should open Ex01 with md5_hash: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Should open Ex01 with md5_hash: {:?}",
+            result.err()
+        );
         let reader = result.unwrap();
         let hashes = reader.stored_hashes();
         assert_eq!(hashes.md5, Some(expected_md5));
@@ -1856,12 +1878,12 @@ mod tests {
         let compressed = encoder.finish().unwrap();
 
         let fake_md5: [u8; 16] = [
-            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x07, 0x08,
         ];
         let fake_sha1: [u8; 20] = [
-            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9,
-            0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9,
+            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xB0, 0xB1, 0xB2, 0xB3,
+            0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9,
         ];
 
         fn make_v2_desc(section_type: u32, data_size: u64, prev: u64) -> [u8; 64] {
@@ -1886,7 +1908,8 @@ mod tests {
 
         // Header
         f.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        f.push(2); f.push(1);
+        f.push(2);
+        f.push(1);
         f.extend_from_slice(&1u16.to_le_bytes());
         f.extend_from_slice(&1u32.to_le_bytes());
         f.extend_from_slice(&[0u8; 16]);
@@ -1911,7 +1934,11 @@ mod tests {
         f.extend_from_slice(&fake_sha1);
 
         // SectorData (0x03)
-        f.extend_from_slice(&make_v2_desc(0x03, compressed.len() as u64, sha1_off as u64));
+        f.extend_from_slice(&make_v2_desc(
+            0x03,
+            compressed.len() as u64,
+            sha1_off as u64,
+        ));
         f.extend_from_slice(&compressed);
 
         // Done (0x0F)
@@ -1926,11 +1953,16 @@ mod tests {
 
     #[test]
     fn ewf2_reader_parses_sha1_hash_section() {
-        let (tmp, expected_md5, expected_sha1) = build_synthetic_ex01_with_md5_and_sha1(b"sha1 test");
+        let (tmp, expected_md5, expected_sha1) =
+            build_synthetic_ex01_with_md5_and_sha1(b"sha1 test");
         let reader = EwfReader::open(tmp.path()).unwrap();
         let hashes = reader.stored_hashes();
         assert_eq!(hashes.md5, Some(expected_md5), "V2 MD5 should be parsed");
-        assert_eq!(hashes.sha1, Some(expected_sha1), "V2 SHA-1 should be parsed");
+        assert_eq!(
+            hashes.sha1,
+            Some(expected_sha1),
+            "V2 SHA-1 should be parsed"
+        );
     }
 
     // -- V2 CaseData metadata parsing --
@@ -1948,7 +1980,10 @@ mod tests {
 
         // CaseData: UTF-16LE tab-separated, same format as device_info
         let case_text = "2\nmain\ncn\ten\tex\tde\tnt\tav\tov\tad\tsd\nCASE-42\tEV-7\tJane Doe\tTest image\tForensic notes\tEnCase 8.0\tWindows 11\t2025-01-15\t2025-01-14\n";
-        let case_utf16: Vec<u8> = case_text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let case_utf16: Vec<u8> = case_text
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
 
         fn make_v2_desc(section_type: u32, data_size: u64, prev: u64) -> [u8; 64] {
             let mut d = [0u8; 64];
@@ -1972,7 +2007,8 @@ mod tests {
 
         // Header
         f.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        f.push(2); f.push(1);
+        f.push(2);
+        f.push(1);
         f.extend_from_slice(&1u16.to_le_bytes());
         f.extend_from_slice(&1u32.to_le_bytes());
         f.extend_from_slice(&[0u8; 16]);
@@ -2061,7 +2097,7 @@ mod tests {
         data.extend_from_slice(&[0u8; 4]); // padding
         data.extend_from_slice(&100u32.to_le_bytes()); // entry 1 first_sector
         data.extend_from_slice(&5u32.to_le_bytes()); // entry 1 sector_count
-        // No space for entry 2 — should handle gracefully
+                                                     // No space for entry 2 — should handle gracefully
         let errors = parse_error2_data(&data);
         assert_eq!(errors.len(), 1);
     }
@@ -2142,7 +2178,9 @@ mod tests {
         let mut sd = [0u8; SECTION_DESCRIPTOR_SIZE];
         sd[..7].copy_from_slice(b"sectors");
         sd[16..24].copy_from_slice(&error2_desc_off.to_le_bytes());
-        sd[24..32].copy_from_slice(&(SECTION_DESCRIPTOR_SIZE as u64 + compressed.len() as u64).to_le_bytes());
+        sd[24..32].copy_from_slice(
+            &(SECTION_DESCRIPTOR_SIZE as u64 + compressed.len() as u64).to_le_bytes(),
+        );
         file_data.extend_from_slice(&sd);
         file_data.extend_from_slice(&compressed);
 
@@ -2150,7 +2188,8 @@ mod tests {
         let mut ed = [0u8; SECTION_DESCRIPTOR_SIZE];
         ed[..6].copy_from_slice(b"error2");
         ed[16..24].copy_from_slice(&done_desc_off.to_le_bytes());
-        ed[24..32].copy_from_slice(&(SECTION_DESCRIPTOR_SIZE as u64 + error2_size as u64).to_le_bytes());
+        ed[24..32]
+            .copy_from_slice(&(SECTION_DESCRIPTOR_SIZE as u64 + error2_size as u64).to_le_bytes());
         file_data.extend_from_slice(&ed);
         file_data.extend_from_slice(&error2_data);
 
@@ -2227,8 +2266,14 @@ mod tests {
         let text = "2\nmain\nb\tsc\tts\n0\t64\t128\n";
         let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
         parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
-        assert_eq!(cs, 99999, "chunk_size should be unchanged when bytes_per_sector=0");
-        assert_eq!(ts, 0, "total_size should be unchanged when bytes_per_sector=0");
+        assert_eq!(
+            cs, 99999,
+            "chunk_size should be unchanged when bytes_per_sector=0"
+        );
+        assert_eq!(
+            ts, 0,
+            "total_size should be unchanged when bytes_per_sector=0"
+        );
     }
 
     #[test]
@@ -2239,9 +2284,16 @@ mod tests {
         let text = "2\nmain\nb\tsc\tts\n512\t0\t128\n";
         let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
         parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
-        assert_eq!(cs, 99999, "chunk_size should be unchanged when sectors_per_chunk=0");
+        assert_eq!(
+            cs, 99999,
+            "chunk_size should be unchanged when sectors_per_chunk=0"
+        );
         // total_size still computable: 512 * 128 = 65536
-        assert_eq!(ts, 512 * 128, "total_size should still be computed from valid bytes_per_sector");
+        assert_eq!(
+            ts,
+            512 * 128,
+            "total_size should still be computed from valid bytes_per_sector"
+        );
     }
 
     // -- reader.rs coverage: v2 truncated chain --
@@ -2254,11 +2306,12 @@ mod tests {
         fn make_minimal_ex01(segment: u32) -> NamedTempFile {
             let mut d = Vec::new();
             d.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-            d.push(2); d.push(1);
+            d.push(2);
+            d.push(1);
             d.extend_from_slice(&1u16.to_le_bytes());
             d.extend_from_slice(&segment.to_le_bytes());
             d.extend_from_slice(&[0u8; 16]); // set_identifier
-            // Done section immediately
+                                             // Done section immediately
             let mut done = [0u8; 64];
             done[0..4].copy_from_slice(&0x0Fu32.to_le_bytes()); // Done type
             done[24..28].copy_from_slice(&64u32.to_le_bytes());
@@ -2276,7 +2329,10 @@ mod tests {
         let result = EwfReader::open_segments(&[seg1.path().into(), seg3.path().into()]);
         assert!(result.is_err(), "Should reject segment gap");
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("segment gap"), "Error should mention segment gap: {err_msg}");
+        assert!(
+            err_msg.contains("segment gap"),
+            "Error should mention segment gap: {err_msg}"
+        );
     }
 
     #[test]
@@ -2284,7 +2340,8 @@ mod tests {
         // Build an Ex01 where the file is truncated mid-section
         let mut file_data = Vec::new();
         file_data.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        file_data.push(2); file_data.push(1);
+        file_data.push(2);
+        file_data.push(1);
         file_data.extend_from_slice(&1u16.to_le_bytes());
         file_data.extend_from_slice(&1u32.to_le_bytes());
         file_data.extend_from_slice(&[0u8; 16]);
@@ -2297,7 +2354,11 @@ mod tests {
 
         let result = EwfReader::open(tmp.path());
         // Should open but with 0 chunks (falls back to defaults)
-        assert!(result.is_ok(), "Truncated Ex01 should open: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Truncated Ex01 should open: {:?}",
+            result.err()
+        );
         let reader = result.unwrap();
         assert_eq!(reader.chunk_count(), 0);
     }
@@ -2307,7 +2368,11 @@ mod tests {
         let data = b"Hello, EWF2 world!";
         let tmp = build_synthetic_ex01(data);
         let result = EwfReader::open(tmp.path());
-        assert!(result.is_ok(), "EwfReader should open Ex01: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "EwfReader should open Ex01: {:?}",
+            result.err()
+        );
         let reader = result.unwrap();
         assert_eq!(reader.chunk_size(), 32768);
         assert_eq!(reader.chunk_count(), 1);
@@ -2319,7 +2384,11 @@ mod tests {
         let data = b"DEADBEEF_EWF2_TEST";
         let tmp = build_synthetic_ex01(data);
         let result = EwfReader::open(tmp.path());
-        assert!(result.is_ok(), "EwfReader should open Ex01: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "EwfReader should open Ex01: {:?}",
+            result.err()
+        );
         let mut reader = result.unwrap();
         let mut buf = vec![0u8; data.len()];
         reader.read_exact(&mut buf).unwrap();
@@ -2332,7 +2401,11 @@ mod tests {
         test_data[512..520].copy_from_slice(b"SEEKTEST");
         let tmp = build_synthetic_ex01(&test_data);
         let result = EwfReader::open(tmp.path());
-        assert!(result.is_ok(), "EwfReader should open Ex01: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "EwfReader should open Ex01: {:?}",
+            result.err()
+        );
         let mut reader = result.unwrap();
         reader.seek(SeekFrom::Start(512)).unwrap();
         let mut buf = [0u8; 8];
@@ -2385,8 +2458,15 @@ mod tests {
         // Segments 1 and 3 — gap at 2
         let result = crate::reader::validate_and_reorder_segments(files, vec![1, 3]);
         assert!(
-            matches!(result, Err(EwfError::SegmentGap { expected: 2, got: 3 })),
-            "Should detect gap: {:?}", result
+            matches!(
+                result,
+                Err(EwfError::SegmentGap {
+                    expected: 2,
+                    got: 3
+                })
+            ),
+            "Should detect gap: {:?}",
+            result
         );
     }
 
@@ -2396,8 +2476,15 @@ mod tests {
         // Segment 0 instead of 1 — gap at start
         let result = crate::reader::validate_and_reorder_segments(files, vec![0]);
         assert!(
-            matches!(result, Err(EwfError::SegmentGap { expected: 1, got: 0 })),
-            "Should reject segment 0: {:?}", result
+            matches!(
+                result,
+                Err(EwfError::SegmentGap {
+                    expected: 1,
+                    got: 0
+                })
+            ),
+            "Should reject segment 0: {:?}",
+            result
         );
     }
 
@@ -2408,7 +2495,8 @@ mod tests {
         let result = crate::reader::validate_and_reorder_segments(files, vec![1, 1]);
         assert!(
             matches!(result, Err(EwfError::SegmentGap { .. })),
-            "Should reject duplicate segment numbers: {:?}", result
+            "Should reject duplicate segment numbers: {:?}",
+            result
         );
     }
 
@@ -2433,13 +2521,20 @@ mod tests {
         assert!(c1.compressed);
 
         // Chunk 0: back-filled by the existing logic (offset of chunk 1 - offset of chunk 0)
-        assert!(c0.size < reader.chunk_size(), "Chunk 0 compressed size should be < chunk_size, got {}", c0.size);
+        assert!(
+            c0.size < reader.chunk_size(),
+            "Chunk 0 compressed size should be < chunk_size, got {}",
+            c0.size
+        );
 
         // Chunk 1 (LAST): this is the bug — without the fix, size == chunk_size (32768).
         // With the fix, size should be the actual compressed length (a few hundred bytes).
-        assert!(c1.size < reader.chunk_size(),
+        assert!(
+            c1.size < reader.chunk_size(),
             "Last chunk compressed size should be < chunk_size ({}), got {}",
-            reader.chunk_size(), c1.size);
+            reader.chunk_size(),
+            c1.size
+        );
     }
 
     #[test]
@@ -2452,9 +2547,12 @@ mod tests {
         assert_eq!(reader.chunk_count(), 1);
         let c0 = reader.chunk_meta(0);
         assert!(c0.compressed);
-        assert!(c0.size < reader.chunk_size(),
+        assert!(
+            c0.size < reader.chunk_size(),
             "Single compressed chunk size should be < chunk_size ({}), got {}",
-            reader.chunk_size(), c0.size);
+            reader.chunk_size(),
+            c0.size
+        );
     }
 
     // -- DoS guard: reject absurd table entry_count --
@@ -2526,9 +2624,16 @@ mod tests {
         tmp.flush().unwrap();
 
         let result = EwfReader::open(tmp.path());
-        assert!(result.is_err(), "Should reject absurd entry_count, got: {:?}", result.ok().map(|r| r.chunk_count()));
+        assert!(
+            result.is_err(),
+            "Should reject absurd entry_count, got: {:?}",
+            result.ok().map(|r| r.chunk_count())
+        );
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("entry count"), "Error should mention entry count: {err_msg}");
+        assert!(
+            err_msg.contains("entry count"),
+            "Error should mention entry count: {err_msg}"
+        );
     }
 
     #[test]
@@ -2537,7 +2642,8 @@ mod tests {
         let mut d = Vec::new();
         // V2 file header (32 bytes)
         d.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        d.push(2); d.push(1); // major, minor
+        d.push(2);
+        d.push(1); // major, minor
         d.extend_from_slice(&1u16.to_le_bytes()); // compression = zlib
         d.extend_from_slice(&1u32.to_le_bytes()); // segment 1
         d.extend_from_slice(&[0u8; 16]); // set_identifier
@@ -2545,7 +2651,7 @@ mod tests {
         // SectorTable section descriptor (64 bytes)
         let mut sec = [0u8; 64];
         sec[0..4].copy_from_slice(&0x04u32.to_le_bytes()); // SectorTable type
-        // data_size: just enough to hold table header (20 bytes) + 1 entry (16 bytes)
+                                                           // data_size: just enough to hold table header (20 bytes) + 1 entry (16 bytes)
         sec[16..24].copy_from_slice(&36u64.to_le_bytes());
         sec[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
         d.extend_from_slice(&sec);
@@ -2564,9 +2670,16 @@ mod tests {
         tmp.flush().unwrap();
 
         let result = EwfReader::open(tmp.path());
-        assert!(result.is_err(), "Should reject absurd v2 entry_count, got: {:?}", result.ok().map(|r| r.chunk_count()));
+        assert!(
+            result.is_err(),
+            "Should reject absurd v2 entry_count, got: {:?}",
+            result.ok().map(|r| r.chunk_count())
+        );
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("entry count"), "Error should mention entry count: {err_msg}");
+        assert!(
+            err_msg.contains("entry count"),
+            "Error should mention entry count: {err_msg}"
+        );
     }
 
     // --- parse_ewf2_case_data edge cases (lines 866, 877, 886, 898) ---
@@ -2638,7 +2751,8 @@ mod tests {
         let mut d = Vec::new();
         // V2 file header (32 bytes)
         d.extend_from_slice(&ewf2::EVF2_SIGNATURE);
-        d.push(2); d.push(1); // major, minor
+        d.push(2);
+        d.push(1); // major, minor
         d.extend_from_slice(&1u16.to_le_bytes()); // compression = zlib
         d.extend_from_slice(&1u32.to_le_bytes()); // segment 1
         d.extend_from_slice(&[0u8; 16]); // set_identifier
@@ -2677,7 +2791,10 @@ mod tests {
         // the underlying file data is now shorter. Seeking past the new EOF
         // succeeds on Unix, but reads return 0 — triggering line 715's
         // early-EOF break in the compressed chunk read loop.
-        let src_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/nps-2010-emails.E01");
+        let src_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/nps-2010-emails.E01"
+        );
         let src_data = std::fs::read(src_path).unwrap();
         let mut tmp = tempfile::Builder::new().suffix(".E01").tempfile().unwrap();
         tmp.write_all(&src_data).unwrap();
@@ -2705,7 +2822,10 @@ mod tests {
         // Same truncate-after-open strategy: open full file, truncate on disk,
         // then call verify(). The verify loop reads all chunks sequentially.
         // Truncated chunks cause decompression errors that propagate as Err.
-        let src_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/nps-2010-emails.E01");
+        let src_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/nps-2010-emails.E01"
+        );
         let src_data = std::fs::read(src_path).unwrap();
         let mut tmp = tempfile::Builder::new().suffix(".E01").tempfile().unwrap();
         tmp.write_all(&src_data).unwrap();
@@ -2723,8 +2843,11 @@ mod tests {
         match result {
             Ok(v) => {
                 // Computed hashes are over zero-filled data — should NOT match stored
-                assert_ne!(v.md5_match, Some(true),
-                    "truncated image should not verify as MD5 match");
+                assert_ne!(
+                    v.md5_match,
+                    Some(true),
+                    "truncated image should not verify as MD5 match"
+                );
             }
             Err(_) => {
                 // Decompression error is also acceptable

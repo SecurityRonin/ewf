@@ -32,7 +32,9 @@ impl CompressionMethod {
             0 => Ok(Self::None),
             1 => Ok(Self::Zlib),
             2 => Ok(Self::Bzip2),
-            _ => Err(EwfError::Parse(format!("unknown EWF2 compression method: {val}"))),
+            _ => Err(EwfError::Parse(format!(
+                "unknown EWF2 compression method: {val}"
+            ))),
         }
     }
 }

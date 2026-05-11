@@ -4,7 +4,11 @@ mod mcp;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ewf", version, about = "CLI and MCP server for EWF (E01) forensic disk images")]
+#[command(
+    name = "ewf",
+    version,
+    about = "CLI and MCP server for EWF (E01) forensic disk images"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -85,20 +89,30 @@ fn main() {
         Command::Verify { ref path, json } => {
             handlers::handle_ewf_verify(path).map(|v| format_output(&v, json, format_verify))
         }
-        Command::Read { ref path, offset, length } => {
+        Command::Read {
+            ref path,
+            offset,
+            length,
+        } => {
             let length = length.min(4096);
             handlers::handle_ewf_read_sectors(path, offset, length).map(|v| format_hex_dump(&v))
         }
-        Command::Sections { ref path, json } => {
-            handlers::handle_ewf_list_sections(path).map(|v| format_output(&v, json, format_sections))
-        }
-        Command::Search { ref path, ref pattern, max_results } => {
+        Command::Sections { ref path, json } => handlers::handle_ewf_list_sections(path)
+            .map(|v| format_output(&v, json, format_sections)),
+        Command::Search {
+            ref path,
+            ref pattern,
+            max_results,
+        } => {
             let max_results = max_results.min(100);
             handlers::handle_ewf_search(path, pattern, max_results).map(|v| format_search(&v))
         }
-        Command::Extract { ref path, offset, length, ref output } => {
-            handlers::handle_ewf_extract(path, offset, length, output).map(|v| format_extract(&v))
-        }
+        Command::Extract {
+            ref path,
+            offset,
+            length,
+            ref output,
+        } => handlers::handle_ewf_extract(path, offset, length, output).map(|v| format_extract(&v)),
         Command::Mcp => {
             mcp::run();
             return;
@@ -132,7 +146,10 @@ fn format_info(v: &serde_json::Value) -> String {
     out.push_str(&format!("Media size:  {} bytes", v["media_size"]));
     let bytes = v["media_size"].as_u64().unwrap_or(0);
     if bytes >= 1024 * 1024 * 1024 {
-        out.push_str(&format!(" ({:.1} GiB)", bytes as f64 / (1024.0 * 1024.0 * 1024.0)));
+        out.push_str(&format!(
+            " ({:.1} GiB)",
+            bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        ));
     } else if bytes >= 1024 * 1024 {
         out.push_str(&format!(" ({:.1} MiB)", bytes as f64 / (1024.0 * 1024.0)));
     }
@@ -189,7 +206,10 @@ fn format_info(v: &serde_json::Value) -> String {
 fn format_verify(v: &serde_json::Value) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!("Computed MD5:  {}\n", v["computed_md5"].as_str().unwrap_or("n/a")));
+    out.push_str(&format!(
+        "Computed MD5:  {}\n",
+        v["computed_md5"].as_str().unwrap_or("n/a")
+    ));
     if let Some(sha1) = v["computed_sha1"].as_str() {
         out.push_str(&format!("Computed SHA1: {sha1}\n"));
     }
@@ -373,7 +393,8 @@ mod tests {
         let result = handle_ewf_list_sections(&path).unwrap();
         let sections = result["sections"].as_array().unwrap();
         assert!(!sections.is_empty());
-        let types: Vec<&str> = sections.iter()
+        let types: Vec<&str> = sections
+            .iter()
             .map(|s| s["type"].as_str().unwrap())
             .collect();
         assert!(types.contains(&"volume"));
@@ -397,7 +418,8 @@ mod tests {
         let result = handle_ewf_search(&path, "55aa", 100).unwrap();
         let matches = result["matches"].as_array().unwrap();
         assert!(!matches.is_empty());
-        let offsets: Vec<u64> = matches.iter()
+        let offsets: Vec<u64> = matches
+            .iter()
             .map(|m| m["offset"].as_u64().unwrap())
             .collect();
         assert!(offsets.contains(&510));

@@ -55,10 +55,10 @@ fn write_temp_e01(content: &[u8]) -> (NamedTempFile, std::path::PathBuf) {
 }
 
 // Layout constants (byte offsets within the test images):
-const FHDR: usize = 13;                         // file header end / first section descriptor start
-const VOL_SECTION_SIZE: u64 = 76 + 94;          // descriptor + volume data
-const VOL_DATA_END: usize = FHDR + 76 + 94;     // end of volume section data = 183
-const SECTORS_DESC_OFF: usize = VOL_DATA_END;   // sectors section starts here = 183
+const FHDR: usize = 13; // file header end / first section descriptor start
+const VOL_SECTION_SIZE: u64 = 76 + 94; // descriptor + volume data
+const VOL_DATA_END: usize = FHDR + 76 + 94; // end of volume section data = 183
+const SECTORS_DESC_OFF: usize = VOL_DATA_END; // sectors section starts here = 183
 const DONE_DESC_OFF: usize = SECTORS_DESC_OFF + 76; // done section = 259
 
 // ── Test 1: next = u64::MAX must not panic ────────────────────────────────────

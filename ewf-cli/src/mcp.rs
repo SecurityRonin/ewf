@@ -122,17 +122,23 @@ fn tool_definitions() -> Value {
 fn dispatch_tool(name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "ewf_info" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
             handlers::handle_ewf_info(path)
         }
         "ewf_verify" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
             handlers::handle_ewf_verify(path)
         }
         "ewf_read_sectors" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
             let length = args.get("length").and_then(|v| v.as_u64()).unwrap_or(512) as usize;
@@ -140,27 +146,44 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<Value, String> {
             handlers::handle_ewf_read_sectors(path, offset, length)
         }
         "ewf_list_sections" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
             handlers::handle_ewf_list_sections(path)
         }
         "ewf_search" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
-            let pattern = args.get("pattern").and_then(|v| v.as_str())
+            let pattern = args
+                .get("pattern")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: pattern")?;
-            let max = args.get("max_results").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+            let max = args
+                .get("max_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10) as usize;
             let max = max.min(100);
             handlers::handle_ewf_search(path, pattern, max)
         }
         "ewf_extract" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
-            let offset = args.get("offset").and_then(|v| v.as_u64())
+            let offset = args
+                .get("offset")
+                .and_then(|v| v.as_u64())
                 .ok_or("missing required parameter: offset")?;
-            let length = args.get("length").and_then(|v| v.as_u64())
+            let length = args
+                .get("length")
+                .and_then(|v| v.as_u64())
                 .ok_or("missing required parameter: length")?;
-            let output = args.get("output").and_then(|v| v.as_str())
+            let output = args
+                .get("output")
+                .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: output")?;
             handlers::handle_ewf_extract(path, offset, length, output)
         }

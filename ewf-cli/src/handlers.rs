@@ -57,7 +57,9 @@ pub fn handle_ewf_read_sectors(path: &str, offset: u64, length: usize) -> Result
         return Err(format!("offset {offset} exceeds media size {total}"));
     }
     let actual_len = length.min((total - offset) as usize);
-    reader.seek(SeekFrom::Start(offset)).map_err(|e| format!("{e}"))?;
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|e| format!("{e}"))?;
     let mut buf = vec![0u8; actual_len];
     reader.read_exact(&mut buf).map_err(|e| format!("{e}"))?;
 
@@ -73,7 +75,9 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
     use std::path::Path;
 
     let first = Path::new(path);
-    let stem = first.file_stem().and_then(|s| s.to_str())
+    let stem = first
+        .file_stem()
+        .and_then(|s| s.to_str())
         .ok_or_else(|| format!("cannot extract stem from: {path}"))?;
     let parent = first.parent().unwrap_or_else(|| Path::new("."));
     let escaped_stem = glob::Pattern::escape(stem);
@@ -108,7 +112,8 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
             if offset + 76 > file_len {
                 break;
             }
-            file.seek(SeekFrom::Start(offset)).map_err(|e| format!("{e}"))?;
+            file.seek(SeekFrom::Start(offset))
+                .map_err(|e| format!("{e}"))?;
             let mut buf = [0u8; 76];
             file.read_exact(&mut buf).map_err(|e| format!("{e}"))?;
             let desc = ewf::SectionDescriptor::parse(&buf, offset).map_err(|e| format!("{e}"))?;
@@ -130,7 +135,11 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
     Ok(json!({ "sections": all_sections }))
 }
 
-pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> Result<Value, String> {
+pub fn handle_ewf_search(
+    path: &str,
+    pattern_hex: &str,
+    max_results: usize,
+) -> Result<Value, String> {
     use std::io::{Read, Seek, SeekFrom};
 
     if pattern_hex.len() % 2 != 0 {
@@ -148,7 +157,9 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
 
     let mut reader = ewf::EwfReader::open(path).map_err(|e| format!("{e}"))?;
     let total = reader.total_size();
-    reader.seek(SeekFrom::Start(0)).map_err(|e| format!("{e}"))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| format!("{e}"))?;
 
     let mut matches = Vec::new();
     let buf_size = 64 * 1024;
@@ -158,13 +169,19 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
 
     while file_offset < total && matches.len() < max_results {
         let to_read = buf_size.min((total - file_offset) as usize);
-        let n = reader.read(&mut buf[carry..carry + to_read]).map_err(|e| format!("{e}"))?;
+        let n = reader
+            .read(&mut buf[carry..carry + to_read])
+            .map_err(|e| format!("{e}"))?;
         if n == 0 {
             break;
         }
         let search_len = carry + n;
 
-        let end = if search_len >= pattern.len() { search_len - pattern.len() + 1 } else { 0 };
+        let end = if search_len >= pattern.len() {
+            search_len - pattern.len() + 1
+        } else {
+            0
+        };
         for i in 0..end {
             if buf[i..i + pattern.len()] == pattern[..] {
                 let match_offset = file_offset - carry as u64 + i as u64;
@@ -192,7 +209,12 @@ pub fn handle_ewf_search(path: &str, pattern_hex: &str, max_results: usize) -> R
     }))
 }
 
-pub fn handle_ewf_extract(path: &str, offset: u64, length: u64, output: &str) -> Result<Value, String> {
+pub fn handle_ewf_extract(
+    path: &str,
+    offset: u64,
+    length: u64,
+    output: &str,
+) -> Result<Value, String> {
     use std::io::{Read, Seek, SeekFrom, Write};
 
     let mut reader = ewf::EwfReader::open(path).map_err(|e| format!("{e}"))?;
@@ -201,7 +223,9 @@ pub fn handle_ewf_extract(path: &str, offset: u64, length: u64, output: &str) ->
         return Err(format!("offset {offset} exceeds media size {total}"));
     }
     let actual_len = length.min(total - offset);
-    reader.seek(SeekFrom::Start(offset)).map_err(|e| format!("{e}"))?;
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|e| format!("{e}"))?;
 
     let mut outfile = std::fs::File::create(output).map_err(|e| format!("{e}"))?;
     let mut remaining = actual_len;
@@ -209,7 +233,9 @@ pub fn handle_ewf_extract(path: &str, offset: u64, length: u64, output: &str) ->
 
     while remaining > 0 {
         let to_read = (remaining as usize).min(buf.len());
-        let n = reader.read(&mut buf[..to_read]).map_err(|e| format!("{e}"))?;
+        let n = reader
+            .read(&mut buf[..to_read])
+            .map_err(|e| format!("{e}"))?;
         if n == 0 {
             break;
         }

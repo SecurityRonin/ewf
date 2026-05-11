@@ -12,9 +12,9 @@ use crate::sections::{
     Chunk, EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry, DEFAULT_LRU_SIZE,
     FILE_HEADER_SIZE, SECTION_DESCRIPTOR_SIZE,
 };
-use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
 #[cfg(feature = "verify")]
 use crate::types::VerifyResult;
+use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
 
 // ---------------------------------------------------------------------------
 // Segment file discovery
@@ -34,10 +34,7 @@ fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
         .ok_or_else(|| EwfError::NoSegments(first.display().to_string()))?;
     let parent = first.parent().unwrap_or_else(|| Path::new("."));
 
-    let ext = first
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("E01");
+    let ext = first.extension().and_then(|e| e.to_str()).unwrap_or("E01");
 
     let escaped_stem = glob::Pattern::escape(stem);
     let parent_str = parent.display();
@@ -387,18 +384,25 @@ impl EwfReader {
                         sha1.copy_from_slice(&digest_buf[16..36]);
                         stored_md5 = Some(md5);
                         stored_sha1 = Some(sha1);
-                        log::debug!("parsed digest section: MD5 = {:02x?}, SHA-1 = {:02x?}", md5, sha1);
+                        log::debug!(
+                            "parsed digest section: MD5 = {:02x?}, SHA-1 = {:02x?}",
+                            md5,
+                            sha1
+                        );
                     }
                     "header" if metadata.case_number.is_none() && metadata.os_version.is_none() => {
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
-                        let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        let data_size = desc
+                            .section_size
+                            .saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
                         if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut compressed = vec![0u8; data_size as usize];
                             file.read_exact(&mut compressed)?;
-                            if let Ok(decompressed) = flate2::read::ZlibDecoder::new(&compressed[..])
-                                .bytes()
-                                .collect::<std::result::Result<Vec<u8>, _>>()
+                            if let Ok(decompressed) =
+                                flate2::read::ZlibDecoder::new(&compressed[..])
+                                    .bytes()
+                                    .collect::<std::result::Result<Vec<u8>, _>>()
                             {
                                 let text = String::from_utf8_lossy(&decompressed);
                                 parse_header_text(&text, &mut metadata);
@@ -407,13 +411,18 @@ impl EwfReader {
                     }
                     "error2" => {
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
-                        let data_size = desc.section_size.saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        let data_size = desc
+                            .section_size
+                            .saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
                         if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut buf = vec![0u8; data_size as usize];
                             file.read_exact(&mut buf)?;
                             acquisition_errors = parse_error2_data(&buf);
-                            log::debug!("parsed error2 section: {} entries", acquisition_errors.len());
+                            log::debug!(
+                                "parsed error2 section: {} entries",
+                                acquisition_errors.len()
+                            );
                         }
                     }
                     _ => {}
@@ -489,7 +498,8 @@ impl EwfReader {
                 match desc.section_type {
                     ewf2::Ewf2SectionType::CaseData => {
                         // Parse case metadata (UTF-16LE tab-separated)
-                        if desc.data_size > 0 && desc.data_size < MAX_SECTION_DATA_SIZE
+                        if desc.data_size > 0
+                            && desc.data_size < MAX_SECTION_DATA_SIZE
                             && metadata.case_number.is_none()
                         {
                             let data_offset = desc_offset + desc.descriptor_size as u64;
@@ -502,7 +512,10 @@ impl EwfReader {
                     }
                     ewf2::Ewf2SectionType::DeviceInfo => {
                         // Parse device_info for media geometry
-                        if desc.data_size > 0 && desc.data_size < MAX_SECTION_DATA_SIZE && chunk_size == 0 {
+                        if desc.data_size > 0
+                            && desc.data_size < MAX_SECTION_DATA_SIZE
+                            && chunk_size == 0
+                        {
                             let data_offset = desc_offset + desc.descriptor_size as u64;
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut raw = vec![0u8; desc.data_size as usize];
@@ -529,7 +542,10 @@ impl EwfReader {
                         let mut entries_buf = vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];
                         file.read_exact(&mut entries_buf)?;
 
-                        log::debug!("parsed v2 sector_table: first_chunk={}, entries={entry_count}", tbl_hdr.first_chunk);
+                        log::debug!(
+                            "parsed v2 sector_table: first_chunk={}, entries={entry_count}",
+                            tbl_hdr.first_chunk
+                        );
 
                         for i in 0..entry_count {
                             let start = i * ewf2::TABLE_ENTRY_SIZE;
@@ -571,7 +587,8 @@ impl EwfReader {
                 }
 
                 // Advance to next section: descriptor_size + data_size + padding_size
-                let advance = desc.descriptor_size as u64 + desc.data_size + desc.padding_size as u64;
+                let advance =
+                    desc.descriptor_size as u64 + desc.data_size + desc.padding_size as u64;
                 if advance == 0 {
                     break;
                 }
