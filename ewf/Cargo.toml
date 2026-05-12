@@ -2,7 +2,7 @@
 name = "ewf"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 description = "Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images"
 license = "MIT"
 repository = "https://github.com/SecurityRonin/ewf"
@@ -30,3 +30,6 @@ sha-1 = { version = "0.10", optional = true }
 [dev-dependencies]
 tempfile = "3"
 md-5 = "0.10"
+
+[lints]
+workspace = true

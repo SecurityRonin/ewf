@@ -10,9 +10,9 @@ use crate::types::{AcquisitionError, EwfMetadata};
 /// val\tval\tval\t...\r\n
 /// ```
 ///
-/// Field codes: c=case_number, n=evidence_number, a=description,
-/// e=examiner, t=notes, av=acquiry_software, ov=os_version,
-/// m=acquiry_date, u=system_date, p=password (ignored).
+/// Field codes: `c=case_number`, `n=evidence_number`, a=description,
+/// e=examiner, t=notes, `av=acquiry_software`, `ov=os_version`,
+/// `m=acquiry_date`, `u=system_date`, p=password (ignored).
 pub(crate) fn parse_header_text(text: &str, meta: &mut EwfMetadata) {
     // Normalize line endings and split into lines
     let text = text.replace("\r\n", "\n");
@@ -50,10 +50,11 @@ pub(crate) fn parse_header_text(text: &str, meta: &mut EwfMetadata) {
 /// Parse EWF `error2` section data into acquisition error entries.
 ///
 /// Layout (little-endian, after the 76-byte section descriptor):
-/// - `u32` number_of_entries
+/// - `u32` `number_of_entries`
 /// - 4 bytes padding
-/// - For each entry: `u32` first_sector + `u32` number_of_sectors
+/// - For each entry: `u32` `first_sector` + `u32` `number_of_sectors`
 /// - 4 bytes Adler-32 checksum
+#[must_use]
 pub fn parse_error2_data(data: &[u8]) -> Vec<AcquisitionError> {
     if data.len() < 8 {
         return Vec::new();

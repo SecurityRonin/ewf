@@ -11,7 +11,7 @@ fn validate_maxpowers() {
 
     assert_eq!(
         reader.total_size(),
-        53687091200,
+        53_687_091_200,
         "Total size must match ewfinfo"
     );
 
@@ -25,10 +25,10 @@ fn validate_maxpowers() {
     let p1_type = mbr[0x1C2];
     let p1_lba = u32::from_le_bytes([mbr[0x1C6], mbr[0x1C7], mbr[0x1C8], mbr[0x1C9]]);
     assert_eq!(p1_type, 0x07, "Partition 1 should be NTFS (0x07)");
-    assert_eq!(p1_lba, 1026048, "Partition 1 LBA must match mmls");
+    assert_eq!(p1_lba, 1_026_048, "Partition 1 LBA must match mmls");
 
     // NTFS boot sector
-    let ntfs_offset = p1_lba as u64 * 512;
+    let ntfs_offset = u64::from(p1_lba) * 512;
     reader.seek(SeekFrom::Start(ntfs_offset)).unwrap();
     let mut ntfs_boot = [0u8; 512];
     reader.read_exact(&mut ntfs_boot).unwrap();
@@ -39,8 +39,8 @@ fn validate_maxpowers() {
     );
 }
 
-/// Full-media MD5: read every byte through EwfReader, hash it, compare against
-/// the hash produced by libewf (pyewf) and The Sleuth Kit (img_cat).
+/// Full-media MD5: read every byte through `EwfReader`, hash it, compare against
+/// the hash produced by libewf (pyewf) and The Sleuth Kit (`img_cat`).
 ///
 /// libewf full-media MD5: 10c1fbc9c01d969789ada1c67211b89f
 /// Sleuth Kit full-media MD5: 10c1fbc9c01d969789ada1c67211b89f

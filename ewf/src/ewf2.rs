@@ -1,6 +1,6 @@
 //! EWF2 (Ex01/Lx01) format types and parsing.
 //!
-//! EWF2 is the Expert Witness Compression Format version 2, introduced in EnCase 7.
+//! EWF2 is the Expert Witness Compression Format version 2, introduced in `EnCase` 7.
 
 use crate::error::{EwfError, Result};
 
@@ -89,6 +89,7 @@ impl Ewf2SectionType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         match self {
             Self::DeviceInfo => "device_info",
@@ -167,6 +168,7 @@ impl Ewf2FileHeader {
 // Section Descriptor (64 bytes)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub const DATA_FLAG_MD5HASHED: u32 = 0x0000_0001;
 pub const DATA_FLAG_ENCRYPTED: u32 = 0x0000_0002;
 
@@ -213,6 +215,7 @@ impl Ewf2SectionDescriptor {
         })
     }
 
+    #[allow(dead_code)]
     pub fn is_md5_hashed(&self) -> bool {
         self.data_flags & DATA_FLAG_MD5HASHED != 0
     }
@@ -227,7 +230,9 @@ impl Ewf2SectionDescriptor {
 // ---------------------------------------------------------------------------
 
 pub const CHUNK_FLAG_COMPRESSED: u32 = 0x0000_0001;
+#[allow(dead_code)]
 pub const CHUNK_FLAG_CHECKSUMED: u32 = 0x0000_0002;
+#[allow(dead_code)]
 pub const CHUNK_FLAG_PATTERNFILL: u32 = 0x0000_0004;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,10 +262,12 @@ impl Ewf2TableEntry {
         self.flags & CHUNK_FLAG_COMPRESSED != 0
     }
 
+    #[allow(dead_code)]
     pub fn is_checksumed(&self) -> bool {
         self.flags & CHUNK_FLAG_CHECKSUMED != 0
     }
 
+    #[allow(dead_code)]
     pub fn is_pattern_fill(&self) -> bool {
         self.flags & (CHUNK_FLAG_COMPRESSED | CHUNK_FLAG_PATTERNFILL)
             == (CHUNK_FLAG_COMPRESSED | CHUNK_FLAG_PATTERNFILL)

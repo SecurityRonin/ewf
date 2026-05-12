@@ -1,8 +1,8 @@
 //! Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images.
 //!
 //! Provides a `Read + Seek` interface over E01 images, supporting:
-//! - EWF v1 format (`.E01` files produced by EnCase, FTK Imager, etc.)
-//! - EWF v2 format (`.Ex01`/`.Lx01` from EnCase 7+) with auto-detection
+//! - EWF v1 format (`.E01` files produced by `EnCase`, FTK Imager, etc.)
+//! - EWF v2 format (`.Ex01`/`.Lx01` from `EnCase` 7+) with auto-detection
 //! - L01 logical evidence files
 //! - Multi-segment images (`.E01`-`.EZZ` for v1, `.Ex01`-`.EzZZ` for v2)
 //! - zlib-compressed chunks with LRU caching
@@ -197,10 +197,10 @@ mod tests {
     ///
     /// Layout:
     ///   [0..13)     File header (segment 1)
-    ///   [13..89)    Section descriptor: "volume", next -> table_desc_offset
+    ///   [13..89)    Section descriptor: "volume", next -> `table_desc_offset`
     ///   [89..183)   Volume data (94 bytes)
-    ///   [183..259)  Section descriptor: "table", next -> sectors_desc_offset
-    ///   [259..283)  Table header (24 bytes): 1 entry, base_offset = sectors_data_offset
+    ///   [183..259)  Section descriptor: "table", next -> `sectors_desc_offset`
+    ///   [259..283)  Table header (24 bytes): 1 entry, `base_offset` = `sectors_data_offset`
     ///   [283..287)  Table entry (4 bytes): compressed bit + offset 0
     ///   [287..363)  Section descriptor: "sectors"
     ///   [363..363+N) Sectors data (zlib-compressed chunk)
@@ -221,7 +221,7 @@ mod tests {
         encoder.write_all(&padded).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         // Calculate offsets
         let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64; // 13
@@ -363,7 +363,7 @@ mod tests {
     // -- Enhancement: table2 support --
 
     /// Build a synthetic E01 that uses "table2" instead of "table" for the chunk table.
-    /// Some EnCase versions write both; our reader must handle either.
+    /// Some `EnCase` versions write both; our reader must handle either.
     fn build_synthetic_e01_with_table2(data: &[u8]) -> NamedTempFile {
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
@@ -378,7 +378,7 @@ mod tests {
         encoder.write_all(&padded).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64;
         let vol_data_offset: u64 = vol_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
@@ -481,7 +481,7 @@ mod tests {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(&padded).unwrap();
         let compressed = encoder.finish().unwrap();
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         // Layout: header | vol_desc | vol_data | tbl_desc("table") | tbl_hdr | entry |
         //         tbl2_desc("table2") | tbl2_hdr | entry2 | sec_desc | data | done_desc
@@ -580,9 +580,9 @@ mod tests {
 
     /// Build a synthetic E01 where the table header has non-zero padding
     /// bytes at [4..8]. The EWF v1 spec defines the table header as:
-    ///   [0..4]  u32 entry_count
+    ///   [0..4]  u32 `entry_count`
     ///   [4..8]  padding (4 bytes, may be non-zero)
-    ///   [8..16] u64 base_offset
+    ///   [8..16] u64 `base_offset`
     ///   [16..24] padding + checksum
     /// If the parser incorrectly reads [0..8] as u64, the non-zero padding
     /// will corrupt the entry count, causing failure.
@@ -593,7 +593,7 @@ mod tests {
         let chunk_size: u32 = 32768;
         let bytes_per_sector: u32 = 512;
         let sectors_per_chunk: u32 = chunk_size / bytes_per_sector;
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(data).unwrap();
@@ -700,7 +700,7 @@ mod tests {
         let chunk_size: u32 = 32768;
         let bytes_per_sector: u32 = 512;
         let sectors_per_chunk: u32 = chunk_size / bytes_per_sector;
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(data).unwrap();
@@ -802,14 +802,12 @@ mod tests {
 
     /// Smoke test against real E01 image (requires test-data/).
     #[test]
-    #[ignore]
+    #[ignore = "requires local test data not in CI"]
     fn ewf_reader_opens_real_e01() {
         let path = std::path::Path::new(
             "../usnjrnl-forensic/tests/data/20200918_0417_DESKTOP-SDN1RPT.E01",
         );
-        if !path.exists() {
-            panic!("Test image not found at {}", path.display());
-        }
+        assert!(path.exists(), "Test image not found at {}", path.display());
         let mut reader = EwfReader::open(path).unwrap();
         assert!(reader.total_size() > 0);
         eprintln!(
@@ -952,7 +950,7 @@ mod tests {
         let mut padded = b"uncompressed chunk data".to_vec();
         padded.resize(chunk_size as usize, 0);
 
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64;
         let vol_data_offset: u64 = vol_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
@@ -961,7 +959,7 @@ mod tests {
         let tbl_entries_offset: u64 = tbl_hdr_offset + 24;
         let sectors_desc_offset: u64 = tbl_entries_offset + 4;
         let sectors_data_offset: u64 = sectors_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
-        let done_desc_offset: u64 = sectors_data_offset + chunk_size as u64;
+        let done_desc_offset: u64 = sectors_data_offset + u64::from(chunk_size);
 
         let mut file_data = Vec::new();
 
@@ -1008,8 +1006,9 @@ mod tests {
         let mut sec_desc = [0u8; SECTION_DESCRIPTOR_SIZE];
         sec_desc[..7].copy_from_slice(b"sectors");
         sec_desc[16..24].copy_from_slice(&done_desc_offset.to_le_bytes());
-        sec_desc[24..32]
-            .copy_from_slice(&(SECTION_DESCRIPTOR_SIZE as u64 + chunk_size as u64).to_le_bytes());
+        sec_desc[24..32].copy_from_slice(
+            &(SECTION_DESCRIPTOR_SIZE as u64 + u64::from(chunk_size)).to_le_bytes(),
+        );
         file_data.extend_from_slice(&sec_desc);
 
         // Raw chunk data (uncompressed)
@@ -1040,7 +1039,7 @@ mod tests {
         let bytes_per_sector: u32 = 512;
         let garbage = b"THIS IS NOT VALID ZLIB DATA!!!!";
 
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
 
         let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64;
         let vol_data_offset: u64 = vol_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
@@ -1256,7 +1255,7 @@ mod tests {
         let compressed2 = enc2.finish().unwrap();
 
         let total_compressed = compressed1.len() + compressed2.len();
-        let sector_count = (chunk_size as u64 * 2) / bytes_per_sector as u64;
+        let sector_count = (u64::from(chunk_size) * 2) / u64::from(bytes_per_sector);
 
         // Layout offsets
         let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64;
@@ -1539,12 +1538,12 @@ mod tests {
     ///
     /// Layout (EWF2 format):
     ///   [0..32)           EVF2 file header
-    ///   [32..96)          Section descriptor: DeviceInfo (type 0x01)
+    ///   [32..96)          Section descriptor: `DeviceInfo` (type 0x01)
     ///   [96..96+D)        Device info data (UTF-16LE tab-separated)
-    ///   [96+D..96+D+64)   Section descriptor: SectorTable (type 0x04)
+    ///   [96+D..96+D+64)   Section descriptor: `SectorTable` (type 0x04)
     ///   [+64..+84)        Table header (20 bytes)
     ///   [+84..+100)       Table entry (16 bytes)
-    ///   [+100..+164)      Section descriptor: SectorData (type 0x03)
+    ///   [+100..+164)      Section descriptor: `SectorData` (type 0x03)
     ///   [+164..+164+C)    Compressed chunk data
     ///   [+164+C..+228+C)  Section descriptor: Done (type 0x0F)
     fn build_synthetic_ex01(data: &[u8]) -> NamedTempFile {
@@ -1554,7 +1553,7 @@ mod tests {
         let chunk_size: u32 = 32768;
         let bytes_per_sector: u32 = 512;
         let sectors_per_chunk: u32 = chunk_size / bytes_per_sector; // 64
-        let total_sectors: u64 = sectors_per_chunk as u64; // 1 chunk worth
+        let total_sectors: u64 = u64::from(sectors_per_chunk); // 1 chunk worth
 
         // Pad data to chunk_size and compress
         let mut padded = data.to_vec();
@@ -1566,12 +1565,11 @@ mod tests {
         // Build device_info content (UTF-16LE tab-separated text)
         // Format: "2\nmain\nb\tsc\tts\n512\t64\t64\n\n"
         let device_info_text = format!(
-            "2\nmain\nb\tsc\tts\n{}\t{}\t{}\n\n",
-            bytes_per_sector, sectors_per_chunk, total_sectors
+            "2\nmain\nb\tsc\tts\n{bytes_per_sector}\t{sectors_per_chunk}\t{total_sectors}\n\n"
         );
         let device_info_utf16: Vec<u8> = device_info_text
             .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
+            .flat_map(u16::to_le_bytes)
             .collect();
 
         let devinfo_data_size = device_info_utf16.len();
@@ -1746,8 +1744,8 @@ mod tests {
 
     // -- EWF2 reader coverage: md5_hash section, no device_info fallback --
 
-    /// Build a synthetic Ex01 with an Md5Hash section and no DeviceInfo section,
-    /// so the reader exercises the Md5Hash parsing and default chunk_size fallback.
+    /// Build a synthetic Ex01 with an `Md5Hash` section and no `DeviceInfo` section,
+    /// so the reader exercises the `Md5Hash` parsing and default `chunk_size` fallback.
     fn build_synthetic_ex01_with_md5_no_devinfo(data: &[u8]) -> (NamedTempFile, [u8; 16]) {
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
@@ -1982,7 +1980,7 @@ mod tests {
         let case_text = "2\nmain\ncn\ten\tex\tde\tnt\tav\tov\tad\tsd\nCASE-42\tEV-7\tJane Doe\tTest image\tForensic notes\tEnCase 8.0\tWindows 11\t2025-01-15\t2025-01-14\n";
         let case_utf16: Vec<u8> = case_text
             .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
+            .flat_map(u16::to_le_bytes)
             .collect();
 
         fn make_v2_desc(section_type: u32, data_size: u64, prev: u64) -> [u8; 64] {
@@ -2065,7 +2063,7 @@ mod tests {
         let data = b"debug test";
         let tmp = build_synthetic_e01(data);
         let reader = EwfReader::open(tmp.path()).unwrap();
-        let debug = format!("{:?}", reader);
+        let debug = format!("{reader:?}");
         assert!(debug.contains("EwfReader"));
         assert!(debug.contains("chunk_size"));
         assert!(debug.contains("total_size"));
@@ -2112,7 +2110,7 @@ mod tests {
         let chunk_size: u32 = 32768;
         let sectors_per_chunk: u32 = 64;
         let bytes_per_sector: u32 = 512;
-        let sector_count = (chunk_size / bytes_per_sector) as u64;
+        let sector_count = u64::from(chunk_size / bytes_per_sector);
         let data = b"error2 test data";
         let mut padded = data.to_vec();
         padded.resize(chunk_size as usize, 0);
@@ -2238,7 +2236,7 @@ mod tests {
         let mut ts = 0u64;
         // UTF-16LE "hi\n" — only 1 line, need 4
         let text = "hi\n";
-        let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
         assert_eq!(cs, 0);
     }
@@ -2250,7 +2248,7 @@ mod tests {
         let mut ts = 0u64;
         // Valid format but with unknown field names alongside known ones
         let text = "2\nmain\nb\tsc\tts\txyz\n512\t64\t128\tignored\n\n";
-        let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
         assert_eq!(cs, 512 * 64);
         assert_eq!(ts, 512 * 128);
@@ -2264,7 +2262,7 @@ mod tests {
         let mut cs: u64 = 99999; // sentinel
         let mut ts: u64 = 0;
         let text = "2\nmain\nb\tsc\tts\n0\t64\t128\n";
-        let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
         assert_eq!(
             cs, 99999,
@@ -2282,7 +2280,7 @@ mod tests {
         let mut cs: u64 = 99999;
         let mut ts: u64 = 0;
         let text = "2\nmain\nb\tsc\tts\n512\t0\t128\n";
-        let utf16: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         parse_ewf2_device_info(&utf16, &mut cs, &mut ts);
         assert_eq!(
             cs, 99999,
@@ -2465,8 +2463,7 @@ mod tests {
                     got: 3
                 })
             ),
-            "Should detect gap: {:?}",
-            result
+            "Should detect gap: {result:?}"
         );
     }
 
@@ -2483,8 +2480,7 @@ mod tests {
                     got: 0
                 })
             ),
-            "Should reject segment 0: {:?}",
-            result
+            "Should reject segment 0: {result:?}"
         );
     }
 
@@ -2495,8 +2491,7 @@ mod tests {
         let result = crate::reader::validate_and_reorder_segments(files, vec![1, 1]);
         assert!(
             matches!(result, Err(EwfError::SegmentGap { .. })),
-            "Should reject duplicate segment numbers: {:?}",
-            result
+            "Should reject duplicate segment numbers: {result:?}"
         );
     }
 
@@ -2564,7 +2559,7 @@ mod tests {
         let chunk_size: u32 = 32768;
         let sectors_per_chunk: u32 = 64;
         let bytes_per_sector: u32 = 512;
-        let sector_count: u64 = (chunk_size / bytes_per_sector) as u64;
+        let sector_count: u64 = u64::from(chunk_size / bytes_per_sector);
 
         let vol_desc_offset: u64 = FILE_HEADER_SIZE as u64;
         let vol_data_offset: u64 = vol_desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
@@ -2702,7 +2697,7 @@ mod tests {
     fn ewf2_case_data_too_few_lines() {
         // UTF-16LE string with only 2 lines (need 4)
         let text = "line1\nline2\n";
-        let raw: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let raw: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let mut meta = EwfMetadata::default();
         reader::parse_ewf2_case_data(&raw, &mut meta);
         assert!(meta.case_number.is_none());
@@ -2712,7 +2707,7 @@ mod tests {
     fn ewf2_case_data_empty_values_skipped() {
         // 4 lines: header, subheader, field names, empty values
         let text = "1\nmain\ncn\ten\t\n\t\t\n";
-        let raw: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let raw: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let mut meta = EwfMetadata::default();
         reader::parse_ewf2_case_data(&raw, &mut meta);
         // All values are empty so nothing should be set
@@ -2724,7 +2719,7 @@ mod tests {
     fn ewf2_case_data_unknown_fields_ignored() {
         // 4 lines with unknown field name "zz"
         let text = "1\nmain\nzz\nfoo\n";
-        let raw: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let raw: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let mut meta = EwfMetadata::default();
         reader::parse_ewf2_case_data(&raw, &mut meta);
         // Unknown field "zz" should be silently ignored
@@ -2734,7 +2729,7 @@ mod tests {
     #[test]
     fn ewf2_case_data_valid_fields_parsed() {
         let text = "1\nmain\ncn\tex\tav\nCASE-001\tJohn\tFTK\n";
-        let raw: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let raw: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let mut meta = EwfMetadata::default();
         reader::parse_ewf2_case_data(&raw, &mut meta);
         assert_eq!(meta.case_number.as_deref(), Some("CASE-001"));
@@ -2783,7 +2778,7 @@ mod tests {
 
     #[test]
     fn truncated_compressed_chunk_returns_error() {
-        use std::io::{Read, Seek, SeekFrom};
+        use std::io::Read;
 
         // Strategy: open a real E01 with FULL data (so chunk table is parsed
         // correctly), then truncate the file on disk AFTER opening. The reader
@@ -2840,18 +2835,15 @@ mod tests {
         // empty/zero data (flate2 returns Ok(0) on empty input), so verify
         // completes with wrong hashes rather than erroring.
         let result = reader.verify();
-        match result {
-            Ok(v) => {
-                // Computed hashes are over zero-filled data — should NOT match stored
-                assert_ne!(
-                    v.md5_match,
-                    Some(true),
-                    "truncated image should not verify as MD5 match"
-                );
-            }
-            Err(_) => {
-                // Decompression error is also acceptable
-            }
+        if let Ok(v) = result {
+            // Computed hashes are over zero-filled data — should NOT match stored
+            assert_ne!(
+                v.md5_match,
+                Some(true),
+                "truncated image should not verify as MD5 match"
+            );
+        } else {
+            // Decompression error is also acceptable
         }
     }
 }

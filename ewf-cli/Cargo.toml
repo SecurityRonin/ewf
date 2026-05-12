@@ -2,7 +2,7 @@
 name = "ewf-cli"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 description = "CLI and MCP server for EWF (E01) forensic disk image inspection"
 license = "MIT"
 repository = "https://github.com/SecurityRonin/ewf"
@@ -34,3 +34,6 @@ The mcp subcommand starts a JSON-RPC stdio server for AI-assisted forensic analy
 assets = [
     ["target/release/ewf", "usr/bin/", "755"],
 ]
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 //! End-to-end tests using small public E01 images from Digital Corpora (DFTT project).
 //!
 //! Test fixtures in `tests/data/` are committed to the repo (~1.2 MB total).
-//! Raw media MD5 hashes verified against both libewf (ewfexport) and The Sleuth Kit (img_cat).
+//! Raw media MD5 hashes verified against both libewf (ewfexport) and The Sleuth Kit (`img_cat`).
 
 use md5::{Digest, Md5};
 use std::io::{Read, Seek, SeekFrom};

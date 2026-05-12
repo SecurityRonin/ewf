@@ -42,11 +42,11 @@ fn volume_data(chunk_count: u32, sectors_per_chunk: u32, bytes_per_sector: u32) 
     v[4..8].copy_from_slice(&chunk_count.to_le_bytes());
     v[8..12].copy_from_slice(&sectors_per_chunk.to_le_bytes());
     v[12..16].copy_from_slice(&bytes_per_sector.to_le_bytes());
-    v[16..24].copy_from_slice(&(chunk_count as u64).to_le_bytes()); // sector_count
+    v[16..24].copy_from_slice(&u64::from(chunk_count).to_le_bytes()); // sector_count
     v
 }
 
-/// Write bytes to a NamedTempFile with an .E01 extension. Returns (file, path).
+/// Write bytes to a `NamedTempFile` with an .E01 extension. Returns (file, path).
 fn write_temp_e01(content: &[u8]) -> (NamedTempFile, std::path::PathBuf) {
     let mut f = NamedTempFile::with_suffix(".E01").unwrap();
     f.write_all(content).unwrap();

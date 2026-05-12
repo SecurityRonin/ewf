@@ -130,14 +130,16 @@ impl EwfVolume {
         })
     }
 
-    /// Chunk size in bytes (sectors_per_chunk * bytes_per_sector).
+    /// Chunk size in bytes (`sectors_per_chunk` * `bytes_per_sector`).
+    #[must_use]
     pub fn chunk_size(&self) -> u64 {
-        self.sectors_per_chunk as u64 * self.bytes_per_sector as u64
+        u64::from(self.sectors_per_chunk) * u64::from(self.bytes_per_sector)
     }
 
-    /// Total image size in bytes (bytes_per_sector * sector_count).
+    /// Total image size in bytes (`bytes_per_sector` * `sector_count`).
+    #[must_use]
     pub fn total_size(&self) -> u64 {
-        self.bytes_per_sector as u64 * self.sector_count
+        u64::from(self.bytes_per_sector) * self.sector_count
     }
 }
 
@@ -180,6 +182,6 @@ pub(crate) struct Chunk {
     pub(crate) compressed: bool,
     /// Absolute file offset of the chunk data within its segment file.
     pub(crate) offset: u64,
-    /// Size of the chunk data on disk (compressed size if compressed, else chunk_size).
+    /// Size of the chunk data on disk (compressed size if compressed, else `chunk_size`).
     pub(crate) size: u64,
 }

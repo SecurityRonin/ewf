@@ -11,7 +11,7 @@ fn validate_szechuan_sauce() {
 
     assert_eq!(
         reader.total_size(),
-        16106127360,
+        16_106_127_360,
         "Image size mismatch vs libewf"
     );
 
@@ -29,8 +29,8 @@ fn validate_szechuan_sauce() {
     assert!(gpt_sig.starts_with("EFI PART"), "GPT signature not found");
 }
 
-/// Full-media MD5: read every byte through EwfReader, hash it, compare against
-/// the hash produced by libewf (pyewf) and The Sleuth Kit (img_cat).
+/// Full-media MD5: read every byte through `EwfReader`, hash it, compare against
+/// the hash produced by libewf (pyewf) and The Sleuth Kit (`img_cat`).
 ///
 /// libewf full-media MD5: bcd3aef20406df00585341f0c743a1ce
 /// Sleuth Kit full-media MD5: bcd3aef20406df00585341f0c743a1ce

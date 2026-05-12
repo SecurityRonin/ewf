@@ -1,7 +1,7 @@
 /// Integrity hashes stored within the EWF image by the acquisition tool.
 ///
-/// The `hash` section (present since EnCase 1) stores an MD5 of the acquired media.
-/// The `digest` section (added in EnCase 6.12+) stores both MD5 and SHA-1.
+/// The `hash` section (present since `EnCase` 1) stores an MD5 of the acquired media.
+/// The `digest` section (added in `EnCase` 6.12+) stores both MD5 and SHA-1.
 /// When both sections are present, MD5 values should be identical.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredHashes {
@@ -30,7 +30,7 @@ pub struct VerifyResult {
 /// Case and acquisition metadata extracted from EWF header sections.
 ///
 /// Populated from the `header` section (ASCII, always present) or `header2` section
-/// (UTF-16LE, EnCase 5+). Fields are `None` when the acquisition tool left them blank.
+/// (UTF-16LE, `EnCase` 5+). Fields are `None` when the acquisition tool left them blank.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EwfMetadata {
     pub case_number: Option<String>,

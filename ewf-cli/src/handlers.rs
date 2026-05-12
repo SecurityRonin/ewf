@@ -89,7 +89,7 @@ pub fn handle_ewf_list_sections(path: &str) -> Result<Value, String> {
         format!("{parent_str}/{escaped_stem}.[Ee][A-Za-z][A-Za-z]"),
     ] {
         if let Ok(entries) = glob::glob(pattern) {
-            seg_paths.extend(entries.filter_map(|r| r.ok()));
+            seg_paths.extend(entries.filter_map(std::result::Result::ok));
         }
     }
     if seg_paths.is_empty() {

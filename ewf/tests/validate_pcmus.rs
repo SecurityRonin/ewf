@@ -11,7 +11,7 @@ fn validate_pcmus() {
 
     assert_eq!(
         reader.total_size(),
-        256060514304,
+        256_060_514_304,
         "Media size mismatch vs ewfinfo"
     );
 
@@ -22,8 +22,8 @@ fn validate_pcmus() {
     assert_eq!(mbr[511], 0xAA);
 }
 
-/// Full-media MD5: read every byte through EwfReader, hash it, compare against
-/// the hash produced by libewf (ewfexport) and The Sleuth Kit (img_cat).
+/// Full-media MD5: read every byte through `EwfReader`, hash it, compare against
+/// the hash produced by libewf (ewfexport) and The Sleuth Kit (`img_cat`).
 ///
 /// libewf full-media MD5:     522df9db8289f4f8132cf47b14d20fb8
 /// Sleuth Kit full-media MD5: 522df9db8289f4f8132cf47b14d20fb8

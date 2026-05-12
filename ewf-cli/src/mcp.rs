@@ -140,8 +140,14 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or("missing required parameter: path")?;
-            let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
-            let length = args.get("length").and_then(|v| v.as_u64()).unwrap_or(512) as usize;
+            let offset = args
+                .get("offset")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let length = args
+                .get("length")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(512) as usize;
             let length = length.min(4096);
             handlers::handle_ewf_read_sectors(path, offset, length)
         }
@@ -163,7 +169,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<Value, String> {
                 .ok_or("missing required parameter: pattern")?;
             let max = args
                 .get("max_results")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(10) as usize;
             let max = max.min(100);
             handlers::handle_ewf_search(path, pattern, max)
@@ -175,11 +181,11 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<Value, String> {
                 .ok_or("missing required parameter: path")?;
             let offset = args
                 .get("offset")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .ok_or("missing required parameter: offset")?;
             let length = args
                 .get("length")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .ok_or("missing required parameter: length")?;
             let output = args
                 .get("output")
