@@ -87,6 +87,10 @@ fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
 /// Maximum section data size we'll read into memory (`DoS` guard).
 const MAX_SECTION_DATA_SIZE: u64 = 1_000_000;
 
+/// Maximum bytes accepted from a zlib-decompressed stream (deflate-bomb guard).
+/// EWF header metadata is plain text; 10 MB is already extremely generous.
+const MAX_DECOMPRESSED_SIZE: u64 = 10 * MAX_SECTION_DATA_SIZE;
+
 /// Maximum table entries we'll allocate for (`DoS` guard).
 /// 4M entries × 32 KB chunks = 128 TB image — far beyond any real forensic image.
 const MAX_TABLE_ENTRIES: usize = 4_000_000;
@@ -392,11 +396,14 @@ impl EwfReader {
                             file.seek(SeekFrom::Start(data_offset))?;
                             let mut compressed = vec![0u8; data_size as usize];
                             file.read_exact(&mut compressed)?;
-                            if let Ok(decompressed) = std::io::Read::bytes(std::io::BufReader::new(
+                            // Limit decompressed output — a crafted stream could expand 1 MB
+                            // compressed input into gigabytes (deflate bomb).
+                            let mut decompressed = Vec::new();
+                            let mut limited = std::io::Read::take(
                                 flate2::read::ZlibDecoder::new(&compressed[..]),
-                            ))
-                            .collect::<std::result::Result<Vec<u8>, _>>()
-                            {
+                                MAX_DECOMPRESSED_SIZE,
+                            );
+                            if std::io::Read::read_to_end(&mut limited, &mut decompressed).is_ok() {
                                 let text = String::from_utf8_lossy(&decompressed);
                                 parse_header_text(&text, &mut metadata);
                             }

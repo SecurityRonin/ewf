@@ -65,7 +65,10 @@ pub fn parse_error2_data(data: &[u8]) -> Vec<AcquisitionError> {
     }
     // Each entry is 8 bytes (u32 first_sector + u32 sector_count), starting at offset 8
     let entries_start = 8;
-    let mut errors = Vec::with_capacity(entry_count);
+    // Cap capacity by what the data can actually contain — prevents OOM when entry_count
+    // is a large value written by a crafted file but the data buffer is small.
+    let max_possible = data.len().saturating_sub(entries_start) / 8;
+    let mut errors = Vec::with_capacity(entry_count.min(max_possible));
     for i in 0..entry_count {
         let off = entries_start + i * 8;
         if off + 8 > data.len() {
