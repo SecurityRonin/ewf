@@ -201,6 +201,14 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for detailed results, image sources
 
 Architecture informed by [Velocidex/go-ewf](https://github.com/Velocidex/go-ewf) (Apache-2.0).
 
+## Related
+
+[**ewf-forensic**](https://github.com/SecurityRonin/ewf-forensic) — forensic integrity analysis and in-memory repair for E01 images: signature verification, section-chain validation, Adler-32 CRC checks, table entry bounds, and full MD5 hash verification with per-chunk decompression.
+
 ## License
 
 MIT
+
+---
+
+[Privacy Policy](https://securityronin.github.io/ewf/privacy/) · [Terms of Service](https://securityronin.github.io/ewf/terms/) · © 2026 Security Ronin Ltd
