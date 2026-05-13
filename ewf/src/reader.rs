@@ -496,33 +496,31 @@ impl EwfReader {
                 }
 
                 match desc.section_type {
-                    ewf2::Ewf2SectionType::CaseData => {
+                    ewf2::Ewf2SectionType::CaseData
+                        if desc.data_size > 0
+                            && desc.data_size < MAX_SECTION_DATA_SIZE
+                            && metadata.case_number.is_none() =>
+                    {
                         // Parse case metadata (UTF-16LE tab-separated)
-                        if desc.data_size > 0
-                            && desc.data_size < MAX_SECTION_DATA_SIZE
-                            && metadata.case_number.is_none()
-                        {
-                            let data_offset = desc_offset + u64::from(desc.descriptor_size);
-                            file.seek(SeekFrom::Start(data_offset))?;
-                            let mut raw = vec![0u8; desc.data_size as usize];
-                            file.read_exact(&mut raw)?;
-                            parse_ewf2_case_data(&raw, &mut metadata);
-                            log::debug!("parsed v2 case_data: case={:?}", metadata.case_number);
-                        }
+                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut raw = vec![0u8; desc.data_size as usize];
+                        file.read_exact(&mut raw)?;
+                        parse_ewf2_case_data(&raw, &mut metadata);
+                        log::debug!("parsed v2 case_data: case={:?}", metadata.case_number);
                     }
-                    ewf2::Ewf2SectionType::DeviceInfo => {
-                        // Parse device_info for media geometry
+                    ewf2::Ewf2SectionType::DeviceInfo
                         if desc.data_size > 0
                             && desc.data_size < MAX_SECTION_DATA_SIZE
-                            && chunk_size == 0
-                        {
-                            let data_offset = desc_offset + u64::from(desc.descriptor_size);
-                            file.seek(SeekFrom::Start(data_offset))?;
-                            let mut raw = vec![0u8; desc.data_size as usize];
-                            file.read_exact(&mut raw)?;
-                            parse_ewf2_device_info(&raw, &mut chunk_size, &mut total_size);
-                            log::debug!("parsed v2 device_info: chunk_size={chunk_size}, total_size={total_size}");
-                        }
+                            && chunk_size == 0 =>
+                    {
+                        // Parse device_info for media geometry
+                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut raw = vec![0u8; desc.data_size as usize];
+                        file.read_exact(&mut raw)?;
+                        parse_ewf2_device_info(&raw, &mut chunk_size, &mut total_size);
+                        log::debug!("parsed v2 device_info: chunk_size={chunk_size}, total_size={total_size}");
                     }
                     ewf2::Ewf2SectionType::SectorTable => {
                         let data_offset = desc_offset + u64::from(desc.descriptor_size);
@@ -560,25 +558,21 @@ impl EwfReader {
                             });
                         }
                     }
-                    ewf2::Ewf2SectionType::Md5Hash => {
-                        if desc.data_size >= 16 {
-                            let data_offset = desc_offset + u64::from(desc.descriptor_size);
-                            file.seek(SeekFrom::Start(data_offset))?;
-                            let mut hash = [0u8; 16];
-                            file.read_exact(&mut hash)?;
-                            stored_md5 = Some(hash);
-                            log::debug!("parsed v2 md5_hash section: {hash:02x?}");
-                        }
+                    ewf2::Ewf2SectionType::Md5Hash if desc.data_size >= 16 => {
+                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut hash = [0u8; 16];
+                        file.read_exact(&mut hash)?;
+                        stored_md5 = Some(hash);
+                        log::debug!("parsed v2 md5_hash section: {hash:02x?}");
                     }
-                    ewf2::Ewf2SectionType::Sha1Hash => {
-                        if desc.data_size >= 20 {
-                            let data_offset = desc_offset + u64::from(desc.descriptor_size);
-                            file.seek(SeekFrom::Start(data_offset))?;
-                            let mut hash = [0u8; 20];
-                            file.read_exact(&mut hash)?;
-                            stored_sha1 = Some(hash);
-                            log::debug!("parsed v2 sha1_hash section: {hash:02x?}");
-                        }
+                    ewf2::Ewf2SectionType::Sha1Hash if desc.data_size >= 20 => {
+                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut hash = [0u8; 20];
+                        file.read_exact(&mut hash)?;
+                        stored_sha1 = Some(hash);
+                        log::debug!("parsed v2 sha1_hash section: {hash:02x?}");
                     }
                     ewf2::Ewf2SectionType::Done | ewf2::Ewf2SectionType::Next => {
                         break;

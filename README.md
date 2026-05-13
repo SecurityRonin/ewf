@@ -203,7 +203,9 @@ Architecture informed by [Velocidex/go-ewf](https://github.com/Velocidex/go-ewf)
 
 ## Related
 
-[**ewf-forensic**](https://github.com/SecurityRonin/ewf-forensic) — forensic integrity analysis and in-memory repair for E01 images: signature verification, section-chain validation, Adler-32 CRC checks, table entry bounds, and full MD5 hash verification with per-chunk decompression.
+**ewf** reads and decodes E01 images — it gives you a `Read + Seek` stream over the evidence data. It does not tell you whether the image has been tampered with or is structurally sound.
+
+[**ewf-forensic**](https://github.com/SecurityRonin/ewf-forensic) is the auditor layer: it reads the raw E01 bytes and reports *what is wrong* — signature forgery, broken section chains, Adler-32 descriptor corruption, out-of-bounds table entries, and MD5 hash mismatches verified via per-chunk zlib decompression. It also repairs Adler-32 errors in-memory without touching your original file. Use `ewf` to read; use `ewf-forensic` to verify and triage.
 
 ## License
 
