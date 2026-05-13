@@ -1,6 +1,6 @@
 [package]
 name = "ewf-cli"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 description = "CLI and MCP server for EWF (E01) forensic disk image inspection"
@@ -17,7 +17,7 @@ name = "ewf"
 path = "src/main.rs"
 
 [dependencies]
-ewf = { version = "0.2.0", path = "../ewf" }
+ewf = { version = "0.2.1", path = "../ewf" }
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
 serde = { version = "1", features = ["derive"] }
