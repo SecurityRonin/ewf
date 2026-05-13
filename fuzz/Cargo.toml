@@ -1,0 +1,27 @@
+[package]
+name = "ewf-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[[bin]]
+name = "parse_header"
+path = "fuzz_targets/parse_header.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_segment"
+path = "fuzz_targets/parse_segment.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ewf = { path = "../ewf", default-features = false }
+tempfile = "3"
