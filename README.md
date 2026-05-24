@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/ewf)](https://docs.rs/ewf)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/SecurityRonin/ewf/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/ewf/actions)
-[![Coverage](https://img.shields.io/badge/coverage-99.86%25-brightgreen)](docs/VALIDATION.md)
+[![Coverage](https://img.shields.io/badge/coverage-99.86%25-brightgreen)](docs/corpus-validation.md)
 [![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
 
 Pure Rust reader for Expert Witness Format (E01/EWF) forensic disk images. Zero GPL dependencies. Includes a CLI and MCP server for AI-assisted forensic analysis.
@@ -195,7 +195,7 @@ ewf = { version = "0.2", default-features = false }
 - Test images sourced from [Digital Corpora](https://digitalcorpora.org/) and [The Evidence Locker](https://theevidencelocker.github.io/) (Kevin Pagano)
 - Three small images are committed as test fixtures and run in CI
 
-See [docs/VALIDATION.md](docs/VALIDATION.md) for detailed results, image sources, and reproduction steps.
+See [docs/corpus-validation.md](docs/corpus-validation.md) for detailed results, image sources, and reproduction steps.
 
 ## Acknowledgments
 
