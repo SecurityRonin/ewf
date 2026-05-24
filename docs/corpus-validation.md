@@ -121,6 +121,25 @@ Every byte of decompressed media is hashed and compared — not sampled.
 
 **Full-media MD5:** `7dae50cec8163697415e69fd72387c01` — identical across libewf, Sleuth Kit, and ewf crate.
 
+## Byte-level differential tests (tests/corpus_differential.rs)
+
+In addition to full-media MD5 comparison, `tests/corpus_differential.rs` runs
+byte-stride differential tests for images 4-6 using `ewfexport -f raw -u` as
+the authoritative reference:
+
+1. Export the E01 to a raw file via `ewfexport -f raw -u`
+2. Compare `EwfReader` bytes at 1 MiB stride + near-end against the raw file
+3. Assert byte identity at every sampled offset
+
+**Results:**
+| Test | Status |
+|------|--------|
+| `corpus_exfat1_matches_ewfexport_raw` | PASS |
+| `corpus_imageformat_mmls_1_matches_ewfexport_raw` | PASS |
+| `corpus_nps_2010_emails_matches_ewfexport_raw` | PASS |
+
+Tests skip automatically if `ewfexport` is not installed at `/usr/local/bin/ewfexport`.
+
 ## How to Reproduce
 
 ### Test fixtures (images 4-6)
