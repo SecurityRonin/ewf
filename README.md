@@ -207,6 +207,25 @@ Architecture informed by [Velocidex/go-ewf](https://github.com/Velocidex/go-ewf)
 
 [**ewf-forensic**](https://github.com/SecurityRonin/ewf-forensic) is the auditor layer: it reads the raw E01 bytes and reports *what is wrong* — signature forgery, broken section chains, Adler-32 descriptor corruption, out-of-bounds table entries, and MD5 hash mismatches verified via per-chunk zlib decompression. It also repairs Adler-32 errors in-memory without touching your original file. Use `ewf` to read; use `ewf-forensic` to verify and triage.
 
+### Container readers
+
+When evidence arrives in a different container format, these crates provide the same `Read + Seek` interface:
+
+| Crate | Format | Notes |
+|-------|--------|-------|
+| [`aff4`](https://github.com/SecurityRonin/aff4) | AFF4 v1 | Evimetry / aff4-imager forensic disk images with Map streams and Snappy/LZ4 |
+| [`vmdk`](https://github.com/SecurityRonin/vmdk) | VMware VMDK | Monolithic sparse disk images from VMware Workstation / ESXi |
+| [`vhdx`](https://github.com/SecurityRonin/vhdx) | Microsoft VHDX | Hyper-V, Windows 8+, WSL2, Azure disk container with dirty-log recovery |
+| [`vhd`](https://github.com/SecurityRonin/vhd) | Legacy VHD | Virtual PC / Hyper-V Generation-1 fixed and dynamic disk images |
+| [`qcow2`](https://github.com/SecurityRonin/qcow2) | QCOW2 v2/v3 | QEMU / KVM / libvirt disk images |
+| [`dd`](https://github.com/SecurityRonin/dd) | Raw / flat | dd, dcfldd, dc3dd, and FTK Imager raw output — the universal fallback |
+
+### Forensic analysers
+
+| Crate | Format | Notes |
+|-------|--------|-------|
+| [`vhdx-forensic`](https://github.com/SecurityRonin/vhdx-forensic) | VHDX | Forensic integrity analyser and in-memory repair tool for VHDX containers |
+
 ## License
 
 MIT
