@@ -1524,7 +1524,7 @@ mod tests {
 
     #[test]
     fn ewf2_parse_table_header() {
-        let mut buf = [0u8; 20];
+        let mut buf = [0u8; 32];
         buf[0..8].copy_from_slice(&0u64.to_le_bytes());
         buf[8..12].copy_from_slice(&128u32.to_le_bytes());
         let header = ewf2::Ewf2TableHeader::parse(&buf).unwrap();
@@ -1536,16 +1536,15 @@ mod tests {
 
     /// Build a minimal single-segment Ex01 file with known data.
     ///
-    /// Layout (EWF2 format):
-    ///   [0..32)           EVF2 file header
-    ///   [32..96)          Section descriptor: `DeviceInfo` (type 0x01)
-    ///   [96..96+D)        Device info data (UTF-16LE tab-separated)
-    ///   [96+D..96+D+64)   Section descriptor: `SectorTable` (type 0x04)
-    ///   [+64..+84)        Table header (20 bytes)
-    ///   [+84..+100)       Table entry (16 bytes)
-    ///   [+100..+164)      Section descriptor: `SectorData` (type 0x03)
-    ///   [+164..+164+C)    Compressed chunk data
-    ///   [+164+C..+228+C)  Section descriptor: Done (type 0x0F)
+    /// Correct EWF2 layout ([data][descriptor] ordering):
+    ///   [0..32)                      EVF2 file header
+    ///   [32..32+D)                   DeviceInfo DATA (UTF-16LE)
+    ///   [32+D..32+D+64)              DeviceInfo DESCRIPTOR (prev=0, data_size=D)
+    ///   [32+D+64..32+D+64+C)         SectorData DATA (zlib-compressed chunk)
+    ///   [32+D+64+C..32+D+128+C)      SectorData DESCRIPTOR (prev=32+D, data_size=C)
+    ///   [32+D+128+C..32+D+128+C+48)  SectorTable DATA (32-byte hdr + 16-byte entry)
+    ///   [32+D+128+C+48..32+D+192+C+48) SectorTable DESCRIPTOR (prev=32+D+64+C, data_size=48)
+    ///   [32+D+192+C+48..32+D+256+C+48) Done DESCRIPTOR (prev=32+D+128+C+48, data_size=0)
     fn build_synthetic_ex01(data: &[u8]) -> NamedTempFile {
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
@@ -1563,7 +1562,6 @@ mod tests {
         let compressed = encoder.finish().unwrap();
 
         // Build device_info content (UTF-16LE tab-separated text)
-        // Format: "2\nmain\nb\tsc\tts\n512\t64\t64\n\n"
         let device_info_text = format!(
             "2\nmain\nb\tsc\tts\n{bytes_per_sector}\t{sectors_per_chunk}\t{total_sectors}\n\n"
         );
@@ -1572,17 +1570,18 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect();
 
-        let devinfo_data_size = device_info_utf16.len();
-        let table_data_size = 20 + 16; // table header + 1 entry
+        let d = device_info_utf16.len(); // D
+        let c = compressed.len();        // C
+        let table_data_size: usize = 32 + 16; // 32-byte hdr + 16-byte entry = 48
 
-        // Calculate section offsets
-        let devinfo_desc_off: usize = 32; // after file header
-        let devinfo_data_off: usize = devinfo_desc_off + 64;
-        let table_desc_off: usize = devinfo_data_off + devinfo_data_size;
-        let table_data_off: usize = table_desc_off + 64;
-        let sectors_desc_off: usize = table_data_off + table_data_size;
-        let sectors_data_off: usize = sectors_desc_off + 64;
-        let done_desc_off: usize = sectors_data_off + compressed.len();
+        // Absolute file offsets
+        let devinfo_data_off: usize = 32;
+        let devinfo_desc_off: usize = devinfo_data_off + d;
+        let sectors_data_off: usize = devinfo_desc_off + 64;
+        let sectors_desc_off: usize = sectors_data_off + c;
+        let table_data_off: usize = sectors_desc_off + 64;
+        let table_desc_off: usize = table_data_off + table_data_size;
+        let done_desc_off: usize = table_desc_off + 64;
 
         // Helper: build a 64-byte EWF2 section descriptor
         fn make_v2_desc(section_type: u32, data_size: u64, previous_offset: u64) -> [u8; 64] {
@@ -1592,7 +1591,6 @@ mod tests {
             desc[8..16].copy_from_slice(&previous_offset.to_le_bytes());
             desc[16..24].copy_from_slice(&data_size.to_le_bytes());
             desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
-                                                                // padding_size = 0, integrity_hash = zeros
             desc
         }
 
@@ -1607,19 +1605,19 @@ mod tests {
         file_data.extend_from_slice(&[0u8; 16]); // set_identifier
         assert_eq!(file_data.len(), 32);
 
-        // 2. DeviceInfo section (type 0x01)
-        file_data.extend_from_slice(&make_v2_desc(0x01, devinfo_data_size as u64, 0));
+        // 2. DeviceInfo DATA then DESCRIPTOR
         file_data.extend_from_slice(&device_info_utf16);
+        file_data.extend_from_slice(&make_v2_desc(0x01, d as u64, 0));
+        assert_eq!(file_data.len(), devinfo_desc_off + 64);
 
-        // 3. SectorTable section (type 0x04)
-        file_data.extend_from_slice(&make_v2_desc(
-            0x04,
-            table_data_size as u64,
-            devinfo_desc_off as u64,
-        ));
+        // 3. SectorData DATA then DESCRIPTOR
+        file_data.extend_from_slice(&compressed);
+        file_data.extend_from_slice(&make_v2_desc(0x03, c as u64, devinfo_desc_off as u64));
+        assert_eq!(file_data.len(), sectors_desc_off + 64);
 
-        // Table header (20 bytes): first_chunk(u64) + entry_count(u32) + pad(u32) + checksum(u32)
-        let mut tbl_hdr = [0u8; 20];
+        // 4. SectorTable DATA (32-byte header + 16-byte entry) then DESCRIPTOR
+        // Table header (32 bytes): first_chunk(u64) + entry_count(u32) + rest zeros
+        let mut tbl_hdr = [0u8; 32];
         tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk = 0
         tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // entry_count = 1
         file_data.extend_from_slice(&tbl_hdr);
@@ -1627,20 +1625,18 @@ mod tests {
         // Table entry (16 bytes): chunk_data_offset(u64) + chunk_data_size(u32) + flags(u32)
         let mut entry = [0u8; 16];
         entry[0..8].copy_from_slice(&(sectors_data_off as u64).to_le_bytes());
-        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         file_data.extend_from_slice(&entry);
-
-        // 4. SectorData section (type 0x03)
         file_data.extend_from_slice(&make_v2_desc(
-            0x03,
-            compressed.len() as u64,
-            table_desc_off as u64,
+            0x04,
+            table_data_size as u64,
+            sectors_desc_off as u64,
         ));
-        file_data.extend_from_slice(&compressed);
+        assert_eq!(file_data.len(), table_desc_off + 64);
 
-        // 5. Done section (type 0x0F)
-        file_data.extend_from_slice(&make_v2_desc(0x0F, 0, sectors_desc_off as u64));
+        // 5. Done DESCRIPTOR (data_size=0)
+        file_data.extend_from_slice(&make_v2_desc(0x0F, 0, table_desc_off as u64));
 
         assert_eq!(file_data.len(), done_desc_off + 64);
 
@@ -1711,24 +1707,45 @@ mod tests {
 
     #[test]
     fn ewf2_reader_rejects_encrypted() {
-        // Build an Ex01 with the encrypted flag set on the first section
+        // Build an Ex01 with the encrypted flag set, using correct [data][descriptor] layout.
+        //
+        // Layout:
+        //   [0..32)    EVF2 file header
+        //   [32..132)  Encrypted DATA (100 dummy bytes)
+        //   [132..196) Encrypted DESCRIPTOR (type=DeviceInfo, data_flags=ENCRYPTED, data_size=100, prev=0)
+        //   [196..260) Done DESCRIPTOR (data_size=0, prev=132)
         let mut file_data = Vec::new();
-        // EVF2 header
+
+        // EVF2 header (32 bytes)
         file_data.extend_from_slice(&ewf2::EVF2_SIGNATURE);
         file_data.push(2);
         file_data.push(1);
         file_data.extend_from_slice(&1u16.to_le_bytes());
         file_data.extend_from_slice(&1u32.to_le_bytes());
         file_data.extend_from_slice(&[0u8; 16]);
+        assert_eq!(file_data.len(), 32);
 
-        // Section descriptor with encrypted flag
+        // Encrypted DATA (100 dummy bytes)
+        file_data.extend_from_slice(&[0u8; 100]);
+
+        // Encrypted DESCRIPTOR with DATA_FLAG_ENCRYPTED (0x02)
         let mut desc = [0u8; 64];
-        desc[0..4].copy_from_slice(&0x01u32.to_le_bytes()); // DeviceInfo
-        desc[4..8].copy_from_slice(&0x02u32.to_le_bytes()); // DATA_FLAG_ENCRYPTED
-        desc[16..24].copy_from_slice(&100u64.to_le_bytes()); // data_size
-        desc[24..28].copy_from_slice(&64u32.to_le_bytes());
+        desc[0..4].copy_from_slice(&0x01u32.to_le_bytes());  // DeviceInfo
+        desc[4..8].copy_from_slice(&0x02u32.to_le_bytes());  // DATA_FLAG_ENCRYPTED
+        desc[8..16].copy_from_slice(&0u64.to_le_bytes());    // previous_offset = 0
+        desc[16..24].copy_from_slice(&100u64.to_le_bytes()); // data_size = 100
+        desc[24..28].copy_from_slice(&64u32.to_le_bytes());  // descriptor_size
         file_data.extend_from_slice(&desc);
-        file_data.extend_from_slice(&[0u8; 100]); // dummy data
+        assert_eq!(file_data.len(), 196);
+
+        // Done DESCRIPTOR
+        let mut done = [0u8; 64];
+        done[0..4].copy_from_slice(&0x0Fu32.to_le_bytes());  // Done
+        done[8..16].copy_from_slice(&132u64.to_le_bytes());  // previous_offset = 132
+        done[16..24].copy_from_slice(&0u64.to_le_bytes());   // data_size = 0
+        done[24..28].copy_from_slice(&64u32.to_le_bytes());  // descriptor_size
+        file_data.extend_from_slice(&done);
+        assert_eq!(file_data.len(), 260);
 
         let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
         tmp.write_all(&file_data).unwrap();
@@ -1746,6 +1763,15 @@ mod tests {
 
     /// Build a synthetic Ex01 with an `Md5Hash` section and no `DeviceInfo` section,
     /// so the reader exercises the `Md5Hash` parsing and default `chunk_size` fallback.
+    ///
+    /// Correct EWF2 layout ([data][descriptor] ordering):
+    ///   [32..32+C)           SectorData DATA
+    ///   [32+C..96+C)         SectorData DESCRIPTOR (prev=0, data_size=C)
+    ///   [96+C..96+C+16)      Md5Hash DATA (16 bytes)
+    ///   [96+C+16..160+C+16)  Md5Hash DESCRIPTOR (prev=32+C, data_size=16)
+    ///   [160+C+16..208+C+16) SectorTable DATA (48 bytes)
+    ///   [208+C+16..272+C+16) SectorTable DESCRIPTOR (prev=96+C+16, data_size=48)
+    ///   [272+C+16..336+C+16) Done DESCRIPTOR (prev=208+C+16, data_size=0)
     fn build_synthetic_ex01_with_md5_no_devinfo(data: &[u8]) -> (NamedTempFile, [u8; 16]) {
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
@@ -1757,7 +1783,6 @@ mod tests {
         encoder.write_all(&padded).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        // Fake MD5 hash
         let fake_md5: [u8; 16] = [
             0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
             0x07, 0x08,
@@ -1772,54 +1797,54 @@ mod tests {
             d
         }
 
-        // Layout: header(32) + sector_table(64+36) + md5_hash(64+16) + sector_data(64+C) + done(64)
-        let tbl_desc_off = 32usize;
-        let tbl_data_size = 20 + 16; // header + 1 entry
-        let md5_desc_off = tbl_desc_off + 64 + tbl_data_size;
-        let md5_data_size = 16usize;
-        let sectors_desc_off = md5_desc_off + 64 + md5_data_size;
-        let sectors_data_off = sectors_desc_off + 64;
-        let done_desc_off = sectors_data_off + compressed.len();
+        let c = compressed.len();
+        let table_data_size: usize = 32 + 16; // 48 bytes
+
+        // Absolute file offsets
+        let sectors_data_off: usize = 32;
+        let sectors_desc_off: usize = sectors_data_off + c;
+        let md5_data_off: usize = sectors_desc_off + 64;
+        let md5_desc_off: usize = md5_data_off + 16;
+        let table_data_off: usize = md5_desc_off + 64;
+        let table_desc_off: usize = table_data_off + table_data_size;
+        let done_desc_off: usize = table_desc_off + 64;
 
         let mut file_data = Vec::new();
 
-        // Header
+        // Header (32 bytes)
         file_data.extend_from_slice(&ewf2::EVF2_SIGNATURE);
         file_data.push(2);
         file_data.push(1);
         file_data.extend_from_slice(&1u16.to_le_bytes());
         file_data.extend_from_slice(&1u32.to_le_bytes());
         file_data.extend_from_slice(&[0u8; 16]);
+        assert_eq!(file_data.len(), 32);
 
-        // SectorTable
-        file_data.extend_from_slice(&make_v2_desc(0x04, tbl_data_size as u64, 0));
-        let mut tbl_hdr = [0u8; 20];
-        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes());
+        // SectorData DATA then DESCRIPTOR
+        file_data.extend_from_slice(&compressed);
+        file_data.extend_from_slice(&make_v2_desc(0x03, c as u64, 0));
+        assert_eq!(file_data.len(), sectors_desc_off + 64);
+
+        // Md5Hash DATA then DESCRIPTOR
+        file_data.extend_from_slice(&fake_md5);
+        file_data.extend_from_slice(&make_v2_desc(0x08, 16, sectors_desc_off as u64));
+        assert_eq!(file_data.len(), md5_desc_off + 64);
+
+        // SectorTable DATA (32-byte hdr + 16-byte entry) then DESCRIPTOR
+        let mut tbl_hdr = [0u8; 32];
+        tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk = 0
+        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // entry_count = 1
         file_data.extend_from_slice(&tbl_hdr);
         let mut entry = [0u8; 16];
         entry[0..8].copy_from_slice(&(sectors_data_off as u64).to_le_bytes());
-        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         file_data.extend_from_slice(&entry);
+        file_data.extend_from_slice(&make_v2_desc(0x04, table_data_size as u64, md5_desc_off as u64));
+        assert_eq!(file_data.len(), table_desc_off + 64);
 
-        // Md5Hash
-        file_data.extend_from_slice(&make_v2_desc(
-            0x08,
-            md5_data_size as u64,
-            tbl_desc_off as u64,
-        ));
-        file_data.extend_from_slice(&fake_md5);
-
-        // SectorData
-        file_data.extend_from_slice(&make_v2_desc(
-            0x03,
-            compressed.len() as u64,
-            md5_desc_off as u64,
-        ));
-        file_data.extend_from_slice(&compressed);
-
-        // Done
-        file_data.extend_from_slice(&make_v2_desc(0x0F, 0, sectors_desc_off as u64));
+        // Done DESCRIPTOR
+        file_data.extend_from_slice(&make_v2_desc(0x0F, 0, table_desc_off as u64));
         assert_eq!(file_data.len(), done_desc_off + 64);
 
         let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
@@ -1893,55 +1918,71 @@ mod tests {
             d
         }
 
-        // Layout: header(32) + sector_table(64+36) + md5(64+16) + sha1(64+20) + sectors(64+C) + done(64)
-        let tbl_off = 32usize;
-        let tbl_data = 20 + 16; // table header + 1 entry
-        let md5_off = tbl_off + 64 + tbl_data;
-        let sha1_off = md5_off + 64 + 16;
-        let sec_off = sha1_off + 64 + 20;
-        let sec_data_off = sec_off + 64;
-        let done_off = sec_data_off + compressed.len();
+        // Correct EWF2 layout ([data][descriptor] ordering):
+        //   [32..32+C)          SectorData DATA
+        //   [32+C..96+C)        SectorData DESCRIPTOR (prev=0, data_size=C)
+        //   [96+C..96+C+16)     Md5Hash DATA
+        //   [96+C+16..160+C+16) Md5Hash DESCRIPTOR (prev=32+C, data_size=16)
+        //   [160+C+16..160+C+36) Sha1Hash DATA
+        //   [160+C+36..224+C+36) Sha1Hash DESCRIPTOR (prev=96+C+16, data_size=20)
+        //   [224+C+36..272+C+36) SectorTable DATA (48 bytes)
+        //   [272+C+36..336+C+36) SectorTable DESCRIPTOR (prev=160+C+36, data_size=48)
+        //   [336+C+36..400+C+36) Done DESCRIPTOR (prev=272+C+36, data_size=0)
+        let c = compressed.len();
+        let table_data_size: usize = 32 + 16; // 48 bytes
+
+        let sectors_data_off: usize = 32;
+        let sectors_desc_off: usize = sectors_data_off + c;
+        let md5_data_off: usize = sectors_desc_off + 64;
+        let md5_desc_off: usize = md5_data_off + 16;
+        let sha1_data_off: usize = md5_desc_off + 64;
+        let sha1_desc_off: usize = sha1_data_off + 20;
+        let table_data_off: usize = sha1_desc_off + 64;
+        let table_desc_off: usize = table_data_off + table_data_size;
+        let done_desc_off: usize = table_desc_off + 64;
 
         let mut f = Vec::new();
 
-        // Header
+        // Header (32 bytes)
         f.extend_from_slice(&ewf2::EVF2_SIGNATURE);
         f.push(2);
         f.push(1);
         f.extend_from_slice(&1u16.to_le_bytes());
         f.extend_from_slice(&1u32.to_le_bytes());
         f.extend_from_slice(&[0u8; 16]);
+        assert_eq!(f.len(), 32);
 
-        // SectorTable (0x04)
-        f.extend_from_slice(&make_v2_desc(0x04, tbl_data as u64, 0));
-        let mut tbl_hdr = [0u8; 20];
-        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes());
+        // SectorData DATA then DESCRIPTOR
+        f.extend_from_slice(&compressed);
+        f.extend_from_slice(&make_v2_desc(0x03, c as u64, 0));
+        assert_eq!(f.len(), sectors_desc_off + 64);
+
+        // Md5Hash DATA then DESCRIPTOR
+        f.extend_from_slice(&fake_md5);
+        f.extend_from_slice(&make_v2_desc(0x08, 16, sectors_desc_off as u64));
+        assert_eq!(f.len(), md5_desc_off + 64);
+
+        // Sha1Hash DATA then DESCRIPTOR
+        f.extend_from_slice(&fake_sha1);
+        f.extend_from_slice(&make_v2_desc(0x09, 20, md5_desc_off as u64));
+        assert_eq!(f.len(), sha1_desc_off + 64);
+
+        // SectorTable DATA (32-byte hdr + 16-byte entry) then DESCRIPTOR
+        let mut tbl_hdr = [0u8; 32];
+        tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk = 0
+        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // entry_count = 1
         f.extend_from_slice(&tbl_hdr);
         let mut entry = [0u8; 16];
-        entry[0..8].copy_from_slice(&(sec_data_off as u64).to_le_bytes());
-        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[0..8].copy_from_slice(&(sectors_data_off as u64).to_le_bytes());
+        entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         f.extend_from_slice(&entry);
+        f.extend_from_slice(&make_v2_desc(0x04, table_data_size as u64, sha1_desc_off as u64));
+        assert_eq!(f.len(), table_desc_off + 64);
 
-        // Md5Hash (0x08)
-        f.extend_from_slice(&make_v2_desc(0x08, 16, tbl_off as u64));
-        f.extend_from_slice(&fake_md5);
-
-        // Sha1Hash (0x09)
-        f.extend_from_slice(&make_v2_desc(0x09, 20, md5_off as u64));
-        f.extend_from_slice(&fake_sha1);
-
-        // SectorData (0x03)
-        f.extend_from_slice(&make_v2_desc(
-            0x03,
-            compressed.len() as u64,
-            sha1_off as u64,
-        ));
-        f.extend_from_slice(&compressed);
-
-        // Done (0x0F)
-        f.extend_from_slice(&make_v2_desc(0x0F, 0, sec_off as u64));
-        assert_eq!(f.len(), done_off + 64);
+        // Done DESCRIPTOR
+        f.extend_from_slice(&make_v2_desc(0x0F, 0, table_desc_off as u64));
+        assert_eq!(f.len(), done_desc_off + 64);
 
         let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
         tmp.write_all(&f).unwrap();
@@ -1976,7 +2017,7 @@ mod tests {
         encoder.write_all(&padded).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        // CaseData: UTF-16LE tab-separated, same format as device_info
+        // CaseData: UTF-16LE tab-separated (NOT zlib-compressed; passes through maybe_zlib_decompress unchanged)
         let case_text = "2\nmain\ncn\ten\tex\tde\tnt\tav\tov\tad\tsd\nCASE-42\tEV-7\tJane Doe\tTest image\tForensic notes\tEnCase 8.0\tWindows 11\t2025-01-15\t2025-01-14\n";
         let case_utf16: Vec<u8> = case_text
             .encode_utf16()
@@ -1992,47 +2033,63 @@ mod tests {
             d
         }
 
-        // Layout: header(32) + case_data(64+N) + sector_table(64+36) + sectors(64+C) + done(64)
-        let case_off = 32usize;
-        let case_data_size = case_utf16.len();
-        let tbl_off = case_off + 64 + case_data_size;
-        let tbl_data = 20 + 16;
-        let sec_off = tbl_off + 64 + tbl_data;
-        let sec_data_off = sec_off + 64;
-        let done_off = sec_data_off + compressed.len();
+        // Correct EWF2 layout ([data][descriptor] ordering):
+        //   [32..32+N)          CaseData DATA (UTF-16LE)
+        //   [32+N..96+N)        CaseData DESCRIPTOR (prev=0, data_size=N)
+        //   [96+N..96+N+C)      SectorData DATA
+        //   [96+N+C..160+N+C)   SectorData DESCRIPTOR (prev=32+N, data_size=C)
+        //   [160+N+C..208+N+C)  SectorTable DATA (48 bytes)
+        //   [208+N+C..272+N+C)  SectorTable DESCRIPTOR (prev=96+N+C, data_size=48)
+        //   [272+N+C..336+N+C)  Done DESCRIPTOR (prev=208+N+C, data_size=0)
+        let n = case_utf16.len(); // N
+        let c = compressed.len(); // C
+        let table_data_size: usize = 32 + 16; // 48 bytes
+
+        let case_data_off: usize = 32;
+        let case_desc_off: usize = case_data_off + n;
+        let sectors_data_off: usize = case_desc_off + 64;
+        let sectors_desc_off: usize = sectors_data_off + c;
+        let table_data_off: usize = sectors_desc_off + 64;
+        let table_desc_off: usize = table_data_off + table_data_size;
+        let done_desc_off: usize = table_desc_off + 64;
 
         let mut f = Vec::new();
 
-        // Header
+        // Header (32 bytes)
         f.extend_from_slice(&ewf2::EVF2_SIGNATURE);
         f.push(2);
         f.push(1);
         f.extend_from_slice(&1u16.to_le_bytes());
         f.extend_from_slice(&1u32.to_le_bytes());
         f.extend_from_slice(&[0u8; 16]);
+        assert_eq!(f.len(), 32);
 
-        // CaseData (0x02)
-        f.extend_from_slice(&make_v2_desc(0x02, case_data_size as u64, 0));
+        // CaseData DATA then DESCRIPTOR
         f.extend_from_slice(&case_utf16);
+        f.extend_from_slice(&make_v2_desc(0x02, n as u64, 0));
+        assert_eq!(f.len(), case_desc_off + 64);
 
-        // SectorTable (0x04)
-        f.extend_from_slice(&make_v2_desc(0x04, tbl_data as u64, case_off as u64));
-        let mut tbl_hdr = [0u8; 20];
-        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes());
+        // SectorData DATA then DESCRIPTOR
+        f.extend_from_slice(&compressed);
+        f.extend_from_slice(&make_v2_desc(0x03, c as u64, case_desc_off as u64));
+        assert_eq!(f.len(), sectors_desc_off + 64);
+
+        // SectorTable DATA (32-byte hdr + 16-byte entry) then DESCRIPTOR
+        let mut tbl_hdr = [0u8; 32];
+        tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk = 0
+        tbl_hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // entry_count = 1
         f.extend_from_slice(&tbl_hdr);
         let mut entry = [0u8; 16];
-        entry[0..8].copy_from_slice(&(sec_data_off as u64).to_le_bytes());
-        entry[8..12].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        entry[0..8].copy_from_slice(&(sectors_data_off as u64).to_le_bytes());
+        entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         f.extend_from_slice(&entry);
+        f.extend_from_slice(&make_v2_desc(0x04, table_data_size as u64, sectors_desc_off as u64));
+        assert_eq!(f.len(), table_desc_off + 64);
 
-        // SectorData (0x03)
-        f.extend_from_slice(&make_v2_desc(0x03, compressed.len() as u64, tbl_off as u64));
-        f.extend_from_slice(&compressed);
-
-        // Done (0x0F)
-        f.extend_from_slice(&make_v2_desc(0x0F, 0, sec_off as u64));
-        assert_eq!(f.len(), done_off + 64);
+        // Done DESCRIPTOR
+        f.extend_from_slice(&make_v2_desc(0x0F, 0, table_desc_off as u64));
+        assert_eq!(f.len(), done_desc_off + 64);
 
         let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
         tmp.write_all(&f).unwrap();
@@ -2634,6 +2691,10 @@ mod tests {
     #[test]
     fn v2_rejects_absurd_table_entry_count() {
         // Build a minimal Ex01 with absurd sector_table entry count.
+        // Correct EWF2 layout ([data][descriptor] ordering):
+        //   [32..80)    SectorTable DATA (48 bytes): 32-byte header with absurd entry_count, rest zeros
+        //   [80..144)   SectorTable DESCRIPTOR (data_size=48, prev=0)
+        //   [144..208)  Done DESCRIPTOR (data_size=0, prev=80)
         let mut d = Vec::new();
         // V2 file header (32 bytes)
         d.extend_from_slice(&ewf2::EVF2_SIGNATURE);
@@ -2642,23 +2703,33 @@ mod tests {
         d.extend_from_slice(&1u16.to_le_bytes()); // compression = zlib
         d.extend_from_slice(&1u32.to_le_bytes()); // segment 1
         d.extend_from_slice(&[0u8; 16]); // set_identifier
+        assert_eq!(d.len(), 32);
 
-        // SectorTable section descriptor (64 bytes)
-        let mut sec = [0u8; 64];
-        sec[0..4].copy_from_slice(&0x04u32.to_le_bytes()); // SectorTable type
-                                                           // data_size: just enough to hold table header (20 bytes) + 1 entry (16 bytes)
-        sec[16..24].copy_from_slice(&36u64.to_le_bytes());
-        sec[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
-        d.extend_from_slice(&sec);
-
-        // Table header (20 bytes) with absurd entry_count
-        let mut tbl_hdr = [0u8; 20];
+        // SectorTable DATA (48 bytes = 32-byte header + 16-byte entry)
+        let mut tbl_hdr = [0u8; 32];
         tbl_hdr[0..8].copy_from_slice(&0u64.to_le_bytes()); // first_chunk
         tbl_hdr[8..12].copy_from_slice(&0x1000_0000u32.to_le_bytes()); // 268M entries!
         d.extend_from_slice(&tbl_hdr);
+        d.extend_from_slice(&[0u8; 16]); // one fake entry
+        assert_eq!(d.len(), 80);
 
-        // One fake entry (16 bytes)
-        d.extend_from_slice(&[0u8; 16]);
+        // SectorTable DESCRIPTOR (data_size=48, prev=0)
+        let mut tbl_desc = [0u8; 64];
+        tbl_desc[0..4].copy_from_slice(&0x04u32.to_le_bytes()); // SectorTable type
+        tbl_desc[8..16].copy_from_slice(&0u64.to_le_bytes());   // previous_offset = 0
+        tbl_desc[16..24].copy_from_slice(&48u64.to_le_bytes()); // data_size = 48
+        tbl_desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
+        d.extend_from_slice(&tbl_desc);
+        assert_eq!(d.len(), 144);
+
+        // Done DESCRIPTOR (data_size=0, prev=80)
+        let mut done_desc = [0u8; 64];
+        done_desc[0..4].copy_from_slice(&0x0Fu32.to_le_bytes()); // Done type
+        done_desc[8..16].copy_from_slice(&80u64.to_le_bytes());  // previous_offset = 80
+        done_desc[16..24].copy_from_slice(&0u64.to_le_bytes());  // data_size = 0
+        done_desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
+        d.extend_from_slice(&done_desc);
+        assert_eq!(d.len(), 208);
 
         let mut tmp = tempfile::Builder::new().suffix(".Ex01").tempfile().unwrap();
         tmp.write_all(&d).unwrap();

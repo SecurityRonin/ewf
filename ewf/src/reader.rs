@@ -134,6 +134,73 @@ pub(crate) fn validate_and_reorder_segments(
 }
 
 // ---------------------------------------------------------------------------
+// EWF2 helpers
+// ---------------------------------------------------------------------------
+
+/// Walk the EWF2 backward-linked section list and return descriptors in
+/// forward (file) order.
+///
+/// EWF2 layout per section: `[data bytes][descriptor 64 B]`.  The terminal
+/// section (Done/Next) sits at the very end of the file with `data_size = 0`.
+/// Each descriptor's `previous_offset` is the absolute file offset of the
+/// preceding descriptor; the first section has `previous_offset = 0`.
+fn collect_ewf2_descriptors(
+    file: &mut File,
+    file_len: u64,
+) -> Result<Vec<ewf2::Ewf2SectionDescriptor>> {
+    const DS: u64 = ewf2::SECTION_DESCRIPTOR_SIZE as u64;
+    if file_len < DS {
+        return Ok(Vec::new());
+    }
+    let mut descriptors = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut desc_offset = file_len - DS;
+
+    loop {
+        if !visited.insert(desc_offset) {
+            return Err(EwfError::Parse(
+                "EWF2 section descriptor list contains a cycle".to_string(),
+            ));
+        }
+        file.seek(SeekFrom::Start(desc_offset))?;
+        let mut buf = [0u8; ewf2::SECTION_DESCRIPTOR_SIZE];
+        file.read_exact(&mut buf)?;
+        let desc = ewf2::Ewf2SectionDescriptor::parse(&buf, desc_offset)?;
+        let prev = desc.previous_offset;
+        descriptors.push(desc);
+        if prev == 0 {
+            break;
+        }
+        if prev >= file_len {
+            return Err(EwfError::Parse(format!(
+                "EWF2 previous_offset {prev:#x} exceeds file length {file_len:#x}"
+            )));
+        }
+        desc_offset = prev;
+    }
+
+    descriptors.reverse();
+    Ok(descriptors)
+}
+
+/// Return a zlib-decompressed copy of `raw` when it starts with a zlib magic
+/// byte (`0x78`), otherwise return a copy of the raw bytes unchanged.
+///
+/// Reads at most `MAX_DECOMPRESSED_SIZE` bytes to guard against deflate bombs.
+fn maybe_zlib_decompress(raw: &[u8]) -> Result<Vec<u8>> {
+    if raw.len() >= 2 && raw[0] == 0x78 {
+        let mut out = Vec::with_capacity(raw.len() * 4);
+        ZlibDecoder::new(raw)
+            .take(MAX_DECOMPRESSED_SIZE)
+            .read_to_end(&mut out)
+            .map_err(|e| EwfError::Parse(format!("EWF2 zlib decompress failed: {e}")))?;
+        Ok(out)
+    } else {
+        Ok(raw.to_vec())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // EwfReader - main public API
 // ---------------------------------------------------------------------------
 
@@ -478,34 +545,36 @@ impl EwfReader {
 
         for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
             let file_len = file.seek(SeekFrom::End(0))?;
-            // First section descriptor starts right after the 32-byte header
-            let mut desc_offset: u64 = ewf2::FILE_HEADER_SIZE as u64;
 
-            loop {
-                if desc_offset + ewf2::SECTION_DESCRIPTOR_SIZE as u64 > file_len {
-                    break;
-                }
+            // EWF2 uses a backward-linked list: each section is [data][descriptor].
+            // Traverse from the terminal Done/Next descriptor at the end of the file
+            // backward via `previous_offset`, then process descriptors forward.
+            let descriptors = collect_ewf2_descriptors(file, file_len)?;
 
-                file.seek(SeekFrom::Start(desc_offset))?;
-                let mut desc_buf = [0u8; ewf2::SECTION_DESCRIPTOR_SIZE];
-                file.read_exact(&mut desc_buf)?;
-                let desc = ewf2::Ewf2SectionDescriptor::parse(&desc_buf, desc_offset)?;
-
+            for desc in &descriptors {
                 if desc.is_encrypted() {
                     return Err(EwfError::EncryptedNotSupported);
                 }
 
+                // Section data immediately precedes the descriptor:
+                //   data_offset = desc.offset - desc.data_size
                 match desc.section_type {
                     ewf2::Ewf2SectionType::CaseData
                         if desc.data_size > 0
                             && desc.data_size < MAX_SECTION_DATA_SIZE
                             && metadata.case_number.is_none() =>
                     {
-                        // Parse case metadata (UTF-16LE tab-separated)
-                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        let data_offset =
+                            desc.offset.checked_sub(desc.data_size).ok_or_else(|| {
+                                EwfError::Parse(format!(
+                                    "EWF2 case_data offset underflow: desc={:#x} size={:#x}",
+                                    desc.offset, desc.data_size
+                                ))
+                            })?;
                         file.seek(SeekFrom::Start(data_offset))?;
-                        let mut raw = vec![0u8; desc.data_size as usize];
-                        file.read_exact(&mut raw)?;
+                        let mut buf = vec![0u8; desc.data_size as usize];
+                        file.read_exact(&mut buf)?;
+                        let raw = maybe_zlib_decompress(&buf)?;
                         parse_ewf2_case_data(&raw, &mut metadata);
                         log::debug!("parsed v2 case_data: case={:?}", metadata.case_number);
                     }
@@ -514,18 +583,35 @@ impl EwfReader {
                             && desc.data_size < MAX_SECTION_DATA_SIZE
                             && chunk_size == 0 =>
                     {
-                        // Parse device_info for media geometry
-                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        let data_offset =
+                            desc.offset.checked_sub(desc.data_size).ok_or_else(|| {
+                                EwfError::Parse(format!(
+                                    "EWF2 device_info offset underflow: desc={:#x} size={:#x}",
+                                    desc.offset, desc.data_size
+                                ))
+                            })?;
                         file.seek(SeekFrom::Start(data_offset))?;
-                        let mut raw = vec![0u8; desc.data_size as usize];
-                        file.read_exact(&mut raw)?;
+                        let mut buf = vec![0u8; desc.data_size as usize];
+                        file.read_exact(&mut buf)?;
+                        let raw = maybe_zlib_decompress(&buf)?;
                         parse_ewf2_device_info(&raw, &mut chunk_size, &mut total_size);
-                        log::debug!("parsed v2 device_info: chunk_size={chunk_size}, total_size={total_size}");
+                        log::debug!(
+                            "parsed v2 device_info: chunk_size={chunk_size}, total_size={total_size}"
+                        );
                     }
                     ewf2::Ewf2SectionType::SectorTable => {
-                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        let data_offset =
+                            desc.offset.checked_sub(desc.data_size).ok_or_else(|| {
+                                EwfError::Parse(format!(
+                                    "EWF2 sector_table offset underflow: desc={:#x} size={:#x}",
+                                    desc.offset, desc.data_size
+                                ))
+                            })?;
                         file.seek(SeekFrom::Start(data_offset))?;
-                        let mut tbl_hdr_buf = [0u8; 20];
+                        // EWF2 table header is 32 bytes: first_chunk(8) + entry_count(4)
+                        // + 20 bytes of reserved/checksum fields. Entries follow the header;
+                        // a 16-byte trailing table checksum closes the section data.
+                        let mut tbl_hdr_buf = [0u8; 32];
                         file.read_exact(&mut tbl_hdr_buf)?;
                         let tbl_hdr = ewf2::Ewf2TableHeader::parse(&tbl_hdr_buf)?;
 
@@ -535,9 +621,10 @@ impl EwfReader {
                                 "table entry count {entry_count} exceeds maximum {MAX_TABLE_ENTRIES}"
                             )));
                         }
-                        let entries_offset = data_offset + 20;
+                        let entries_offset = data_offset + 32;
                         file.seek(SeekFrom::Start(entries_offset))?;
-                        let mut entries_buf = vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];
+                        let mut entries_buf =
+                            vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];
                         file.read_exact(&mut entries_buf)?;
 
                         log::debug!(
@@ -548,8 +635,8 @@ impl EwfReader {
                         for i in 0..entry_count {
                             let start = i * ewf2::TABLE_ENTRY_SIZE;
                             let end = start + ewf2::TABLE_ENTRY_SIZE;
-                            let entry = ewf2::Ewf2TableEntry::parse(&entries_buf[start..end])?;
-
+                            let entry =
+                                ewf2::Ewf2TableEntry::parse(&entries_buf[start..end])?;
                             chunks.push(Chunk {
                                 segment_idx: seg_idx,
                                 compressed: entry.is_compressed(),
@@ -559,7 +646,13 @@ impl EwfReader {
                         }
                     }
                     ewf2::Ewf2SectionType::Md5Hash if desc.data_size >= 16 => {
-                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        let data_offset =
+                            desc.offset.checked_sub(desc.data_size).ok_or_else(|| {
+                                EwfError::Parse(format!(
+                                    "EWF2 md5_hash offset underflow: desc={:#x} size={:#x}",
+                                    desc.offset, desc.data_size
+                                ))
+                            })?;
                         file.seek(SeekFrom::Start(data_offset))?;
                         let mut hash = [0u8; 16];
                         file.read_exact(&mut hash)?;
@@ -567,26 +660,22 @@ impl EwfReader {
                         log::debug!("parsed v2 md5_hash section: {hash:02x?}");
                     }
                     ewf2::Ewf2SectionType::Sha1Hash if desc.data_size >= 20 => {
-                        let data_offset = desc_offset + u64::from(desc.descriptor_size);
+                        let data_offset =
+                            desc.offset.checked_sub(desc.data_size).ok_or_else(|| {
+                                EwfError::Parse(format!(
+                                    "EWF2 sha1_hash offset underflow: desc={:#x} size={:#x}",
+                                    desc.offset, desc.data_size
+                                ))
+                            })?;
                         file.seek(SeekFrom::Start(data_offset))?;
                         let mut hash = [0u8; 20];
                         file.read_exact(&mut hash)?;
                         stored_sha1 = Some(hash);
                         log::debug!("parsed v2 sha1_hash section: {hash:02x?}");
                     }
-                    ewf2::Ewf2SectionType::Done | ewf2::Ewf2SectionType::Next => {
-                        break;
-                    }
+                    ewf2::Ewf2SectionType::Done | ewf2::Ewf2SectionType::Next => {}
                     _ => {}
                 }
-
-                // Advance to next section: descriptor_size + data_size + padding_size
-                let advance =
-                    u64::from(desc.descriptor_size) + desc.data_size + u64::from(desc.padding_size);
-                if advance == 0 {
-                    break;
-                }
-                desc_offset += advance;
             }
         }
 

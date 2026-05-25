@@ -286,9 +286,10 @@ pub struct Ewf2TableHeader {
 
 impl Ewf2TableHeader {
     pub fn parse(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 20 {
+        // EWF2 table header is 32 bytes: first_chunk(8) + entry_count(4) + 20 reserved.
+        if buf.len() < 32 {
             return Err(EwfError::BufferTooShort {
-                expected: 20,
+                expected: 32,
                 got: buf.len(),
             });
         }
