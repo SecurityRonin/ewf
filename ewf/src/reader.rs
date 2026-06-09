@@ -27,8 +27,16 @@ use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
 /// - 4-char (v2): `.Ex01`..`.EzZZ`, `.Lx01`..`.LzZZ`
 ///
 /// The directory to glob for sibling segment files of `first`.
+///
+/// `Path::parent()` returns `Some("")` — not `None` — for a bare filename, so a
+/// naive `unwrap_or_else(|| ".")` leaves an empty directory and roots the glob at
+/// the filesystem root. Map both the empty and missing cases to the current
+/// directory so `ingest <bare.E01>` works from the evidence directory.
 fn segment_dir(first: &Path) -> &Path {
-    first.parent().unwrap_or_else(|| Path::new("."))
+    match first.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 /// Returns paths sorted by expected segment order.
