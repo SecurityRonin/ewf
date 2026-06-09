@@ -26,13 +26,18 @@ use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
 /// - 3-char (v1): `.E01`..`.EZZ`, `.L01`..`.LZZ`
 /// - 4-char (v2): `.Ex01`..`.EzZZ`, `.Lx01`..`.LzZZ`
 ///
+/// The directory to glob for sibling segment files of `first`.
+fn segment_dir(first: &Path) -> &Path {
+    first.parent().unwrap_or_else(|| Path::new("."))
+}
+
 /// Returns paths sorted by expected segment order.
 fn discover_segments(first: &Path) -> Result<Vec<PathBuf>> {
     let stem = first
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| EwfError::NoSegments(first.display().to_string()))?;
-    let parent = first.parent().unwrap_or_else(|| Path::new("."));
+    let parent = segment_dir(first);
 
     let ext = first.extension().and_then(|e| e.to_str()).unwrap_or("E01");
 
@@ -1043,5 +1048,28 @@ impl std::fmt::Debug for EwfReader {
             .field("metadata", &self.metadata)
             .field("acquisition_errors", &self.acquisition_errors)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod segment_dir_tests {
+    use super::segment_dir;
+    use std::path::Path;
+
+    #[test]
+    fn bare_filename_globs_current_dir_not_root() {
+        // `Path::parent()` returns Some("") — not None — for a bare filename, so
+        // the segment glob must fall back to the current directory, not "/".
+        // Reproduces finding F1: `ingest <bare.E01>` from the evidence dir.
+        assert_eq!(segment_dir(Path::new("bare.E01")), Path::new("."));
+    }
+
+    #[test]
+    fn directory_qualified_filename_keeps_its_parent() {
+        assert_eq!(
+            segment_dir(Path::new("/evidence/case/bare.E01")),
+            Path::new("/evidence/case")
+        );
+        assert_eq!(segment_dir(Path::new("sub/bare.E01")), Path::new("sub"));
     }
 }
