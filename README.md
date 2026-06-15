@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ewf.svg)](https://crates.io/crates/ewf)
 [![docs.rs](https://img.shields.io/docsrs/ewf)](https://docs.rs/ewf)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/SecurityRonin/ewf/actions/workflows/ci.yml/badge.svg)](https://github.com/SecurityRonin/ewf/actions)
 [![Coverage](https://img.shields.io/badge/coverage-99.86%25-brightgreen)](docs/corpus-validation.md)
 [![Sponsor](https://img.shields.io/badge/sponsor-h4x0r-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/h4x0r)
@@ -112,7 +112,7 @@ reader.seek(SeekFrom::Start(1_048_576))?;
 - **Acquisition errors** — extracts read-error entries from error2 sections
 - **table + table2 resilience** — handles both section types, deduplicates correctly
 - **DoS-safe** — guards against malformed images with absurd table entry counts
-- **MIT licensed** — no GPL, safe for proprietary DFIR tooling
+- **Apache-2.0 licensed** — no GPL, safe for proprietary DFIR tooling
 
 ## Library API examples
 
@@ -232,7 +232,7 @@ When evidence arrives in a different container format, these crates provide the 
 
 ## License
 
-MIT
+Apache-2.0
 
 ---
 
