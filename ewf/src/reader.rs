@@ -825,33 +825,45 @@ impl EwfReader {
     /// }
     /// ```
     #[cfg(feature = "verify")]
-    pub fn verify(&mut self) -> Result<VerifyResult> {
+    pub fn verify(&self) -> Result<VerifyResult> {
         use md5::Digest;
-
-        let has_sha1 = self.stored_sha1.is_some();
+        use rayon::prelude::*;
 
         let mut md5_hasher = md5::Md5::new();
-        let mut sha1_hasher = if has_sha1 {
+        let mut sha1_hasher = if self.stored_sha1.is_some() {
             Some(sha1::Sha1::new())
         } else {
             None
         };
 
-        self.position = 0;
-        let mut buf = vec![0u8; self.chunk_size as usize];
-        let mut remaining = self.total_size;
+        // Hashing is serial (MD5/SHA1 chain their state), but zlib decompression
+        // — the CPU cost of a full-image hash — is not. Decompress chunks in
+        // parallel BATCHES, then feed them to the hashers IN ORDER. A batch of
+        // `threads * 4` chunks keeps every core busy while bounding peak memory
+        // to one batch of decompressed chunks. `decompress_chunk` is cacheless,
+        // so streaming the whole image neither pollutes nor contends the LRU.
+        let chunk_count = self.chunks.len();
+        let batch = rayon::current_num_threads().saturating_mul(4).max(1);
+        let mut hashed: u64 = 0;
 
-        while remaining > 0 {
-            let to_read = std::cmp::min(remaining, buf.len() as u64) as usize;
-            let n = io::Read::read(self, &mut buf[..to_read])?;
-            if n == 0 {
-                break;
+        for start in (0..chunk_count).step_by(batch) {
+            let end = (start + batch).min(chunk_count);
+            let pages: Vec<Vec<u8>> = (start..end)
+                .into_par_iter()
+                .map(|ci| self.decompress_chunk(ci))
+                .collect::<Result<Vec<_>>>()?;
+            for page in pages {
+                // Trim the final chunk to the image's true length: a chunk
+                // decompresses into a full chunk_size buffer, but the last one
+                // may back fewer logical bytes.
+                let remaining = self.total_size.saturating_sub(hashed);
+                let take = (page.len() as u64).min(remaining) as usize;
+                md5_hasher.update(&page[..take]);
+                if let Some(ref mut h) = sha1_hasher {
+                    h.update(&page[..take]);
+                }
+                hashed += take as u64;
             }
-            md5_hasher.update(&buf[..n]);
-            if let Some(ref mut h) = sha1_hasher {
-                h.update(&buf[..n]);
-            }
-            remaining -= n as u64;
         }
 
         let computed_md5: [u8; 16] = md5_hasher.finalize().into();
@@ -891,6 +903,23 @@ impl EwfReader {
             }
         }
 
+        let page = self.decompress_chunk(chunk_id)?;
+
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.put(chunk_id, page.clone());
+        Ok(page)
+    }
+
+    /// Decompress a chunk by index WITHOUT touching the cache.
+    ///
+    /// The cacheless counterpart to [`read_chunk`]: used by the parallel
+    /// [`verify`](Self::verify), which streams every chunk exactly once and so
+    /// must neither pollute the LRU nor serialize on its lock. Positioned read
+    /// + decompress, all through `&self`.
+    fn decompress_chunk(&self, chunk_id: usize) -> Result<Vec<u8>> {
         let mut page = vec![0u8; self.chunk_size as usize];
         let chunk = self.chunks[chunk_id].clone();
         let file = &self.segments[chunk.segment_idx];
@@ -924,11 +953,6 @@ impl EwfReader {
             }
         }
 
-        let mut cache = self
-            .cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.put(chunk_id, page.clone());
         Ok(page)
     }
 

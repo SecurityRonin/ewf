@@ -21,6 +21,7 @@ verify = ["dep:md-5", "dep:sha-1"]
 [dependencies]
 flate2 = { workspace = true }
 lru = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 glob = { workspace = true }
