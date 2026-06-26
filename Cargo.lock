@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "ewf"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "flate2",
  "glob",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "ewf-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "ewf",

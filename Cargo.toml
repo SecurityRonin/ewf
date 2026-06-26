@@ -5,7 +5,7 @@ resolver = "2"
 # Single source of truth for fields shared by every member (DRY): bump version /
 # MSRV / license here once; members inherit via `field.workspace = true`.
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -19,7 +19,7 @@ keywords = ["forensics", "ewf", "e01", "encase", "disk-image"]
 # members write `dep.workspace = true`. The inter-crate `ewf` version lives here
 # too, so a bump touches one line instead of every member.
 [workspace.dependencies]
-ewf = { path = "ewf", version = "0.2.2" }
+ewf = { path = "ewf", version = "0.2.3" }
 flate2 = "1"
 lru = "0.12"
 rayon = "1"
