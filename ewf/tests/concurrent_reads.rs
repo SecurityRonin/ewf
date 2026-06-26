@@ -82,3 +82,19 @@ fn concurrent_reads_of_same_chunk_are_stable() {
         }
     });
 }
+
+/// `verify()` must run through a shared `&self` so it can decompress chunks in
+/// PARALLEL (MD5/SHA1 are serial, but zlib decompression — the CPU cost — is
+/// not). A non-mut binding forces the `&self` signature; the computed MD5 must
+/// still match the stored hash, i.e. parallel decompression reproduces the
+/// exact serial byte stream. exfat1.E01 ships a stored MD5.
+#[test]
+fn verify_runs_on_shared_ref_and_matches_stored_md5() {
+    let reader = EwfReader::open(data("exfat1.E01")).expect("open");
+    let result = reader.verify().expect("verify");
+    assert_eq!(
+        result.md5_match,
+        Some(true),
+        "parallel verify's computed MD5 must match the stored MD5"
+    );
+}
