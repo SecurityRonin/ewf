@@ -1,6 +1,37 @@
 # Task: Parallel chunk-decompression (intra-image) + multi-source ingest (inter-image)
 
-Status: **planned** (fleet task). Research done 2026-06-27. Build with **strict TDD** + before/after benchmark on a real E01.
+Status: **partially DONE** (2026-06-27). The reader concurrency *enabler* and the
+issen inter-image ingest parallelism are implemented with strict TDD; the remaining
+piece is a parallel *consumer* in ewf (parallel verify/hash) to cash in the intra-image
+win for full-image ops. Research done 2026-06-27.
+
+## Done so far (strict TDD, separate RED/GREEN commits)
+
+- **Intra-image enabler — `EwfReader` is now `Sync` with positioned reads** (ewf repo):
+  `read_at(&self)` serves cursor-free positioned reads (`pread`/`seek_read`, no mmap, keeps
+  `forbid(unsafe)`); chunk cache is `Mutex<LruCache>` updated through `&self`, decompression
+  happens *outside* the lock so distinct chunks decompress in parallel. RED `b1d8be8`
+  (8-thread disjoint + 16-thread hot-chunk differential vs serial) → GREEN `37c2963`.
+  Validated: full ewf suite + the `ewfexport` differential oracle stays byte-correct.
+- **Inter-image — parallel multi-source ingest** (issen repo): `parse_sources_parallel`
+  (capped, order-preserving rayon map) RED `94b3f7d` (order + `Barrier(2)` concurrency proof
+  + clamp) → GREEN `d9c0ac5`; wired into `ingest::run` as phase A (serial store setup +
+  resume) / phase B (parallel parse, cap = cores-2) / phase C (serial in-order commit) —
+  commit `a38cf95`. Determinism holds because cross-source events differ in
+  `evidence_source_id` → `record_hash`, so the `ORDER BY timestamp_ns, record_hash, id` sort
+  is run-order-independent. Validated: real DC01 E01 still ingests 1,072,067 events; issen-cli
+  lib 150/150; integration suite byte-identical to HEAD (the 36 fails are pre-existing).
+
+## Still TODO
+
+1. **Parallel consumer in ewf** — rayon over the chunk range inside `verify()` / a `par_read`,
+   so `ewf verify` and full-image hashers actually use the now-`Sync` reader (the intra-image
+   benchmark below). This is the remaining intra-image payoff.
+2. **issen-ewf wrapper** — drop its `Mutex<EwfReader>`, delegate to `read_at(&self)`; gated on
+   **publishing ewf 0.2.2** (issen depends on the registry `ewf = "0.2"`, where `read_at` is
+   still private). Bump + publish ewf 0.2.2, then `cargo update -p ewf` in issen.
+
+Build the remainder with **strict TDD** + before/after benchmark on a real E01.
 
 ## Why (and why NOT for issen's ingest)
 
