@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use flate2::read::ZlibDecoder;
 use lru::LruCache;
@@ -15,6 +16,40 @@ use crate::sections::{
 #[cfg(feature = "verify")]
 use crate::types::VerifyResult;
 use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
+
+// ---------------------------------------------------------------------------
+// Positioned read (thread-safe, cursor-free)
+// ---------------------------------------------------------------------------
+
+/// Fill `buf` from `file` starting at `offset`, returning the bytes read (short
+/// only at end of file).
+///
+/// Uses the OS positioned-read primitive — `pread(2)` on Unix, `seek_read`
+/// (a `ReadFile` carrying its own `OVERLAPPED` offset) on Windows — so it takes
+/// `&File` and never touches a shared cursor. That makes it safe to call
+/// concurrently from many threads on one handle: each call carries its own
+/// offset, so there is no read/seek race. Keeps `forbid(unsafe)` (no mmap).
+fn pread(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+    #[cfg(unix)]
+    use std::os::unix::fs::FileExt;
+    #[cfg(windows)]
+    use std::os::windows::fs::FileExt;
+
+    let mut total = 0usize;
+    while total < buf.len() {
+        #[cfg(unix)]
+        let res = file.read_at(&mut buf[total..], offset + total as u64);
+        #[cfg(windows)]
+        let res = file.seek_read(&mut buf[total..], offset + total as u64);
+        match res {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
+}
 
 // ---------------------------------------------------------------------------
 // Segment file discovery
@@ -242,8 +277,10 @@ pub struct EwfReader {
     total_size: u64,
     /// Current read position (for Read + Seek).
     position: u64,
-    /// LRU cache: `chunk_id` -> decompressed chunk data.
-    cache: LruCache<usize, Vec<u8>>,
+    /// LRU cache: `chunk_id` -> decompressed chunk data. `Mutex`-guarded so the
+    /// reader can serve positioned reads through a shared `&self` from many
+    /// threads — the cache is the only interior mutation on the read path.
+    cache: Mutex<LruCache<usize, Vec<u8>>>,
     /// MD5 from hash/digest section (16 bytes), if present.
     stored_md5: Option<[u8; 16]>,
     /// SHA-1 from digest section (20 bytes), if present.
@@ -514,7 +551,9 @@ impl EwfReader {
             return Err(EwfError::MissingVolume);
         }
 
-        let cache = LruCache::new(std::num::NonZeroUsize::new(cache_size.max(1)).unwrap());
+        let cache = Mutex::new(LruCache::new(
+            std::num::NonZeroUsize::new(cache_size.max(1)).unwrap(),
+        ));
 
         Ok(Self {
             segments: ordered_segments,
@@ -636,8 +675,7 @@ impl EwfReader {
                         }
                         let entries_offset = data_offset + 32;
                         file.seek(SeekFrom::Start(entries_offset))?;
-                        let mut entries_buf =
-                            vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];
+                        let mut entries_buf = vec![0u8; entry_count * ewf2::TABLE_ENTRY_SIZE];
                         file.read_exact(&mut entries_buf)?;
 
                         log::debug!(
@@ -648,8 +686,7 @@ impl EwfReader {
                         for i in 0..entry_count {
                             let start = i * ewf2::TABLE_ENTRY_SIZE;
                             let end = start + ewf2::TABLE_ENTRY_SIZE;
-                            let entry =
-                                ewf2::Ewf2TableEntry::parse(&entries_buf[start..end])?;
+                            let entry = ewf2::Ewf2TableEntry::parse(&entries_buf[start..end])?;
                             chunks.push(Chunk {
                                 segment_idx: seg_idx,
                                 compressed: entry.is_compressed(),
@@ -700,7 +737,9 @@ impl EwfReader {
             total_size = chunks.len() as u64 * chunk_size;
         }
 
-        let cache = LruCache::new(std::num::NonZeroUsize::new(cache_size.max(1)).unwrap());
+        let cache = Mutex::new(LruCache::new(
+            std::num::NonZeroUsize::new(cache_size.max(1)).unwrap(),
+        ));
 
         Ok(Self {
             segments: ordered_segments,
@@ -833,26 +872,32 @@ impl EwfReader {
     }
 
     /// Read and decompress a single chunk by its index.
-    fn read_chunk(&mut self, chunk_id: usize) -> Result<Vec<u8>> {
-        if let Some(cached) = self.cache.get(&chunk_id) {
-            return Ok(cached.clone());
+    ///
+    /// Takes `&self`: the compressed bytes are fetched with a positioned read
+    /// (no shared cursor) and decompressed WITHOUT holding the cache lock, so
+    /// distinct chunks decompress in parallel across threads. The lock is held
+    /// only for the brief cache probe and insert.
+    fn read_chunk(&self, chunk_id: usize) -> Result<Vec<u8>> {
+        // Fast path: serve from cache. Recover a poisoned lock rather than
+        // panic — a poisoned cache is still readable and a panic here would
+        // take down every concurrent reader.
+        {
+            let mut cache = self
+                .cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(cached) = cache.get(&chunk_id) {
+                return Ok(cached.clone());
+            }
         }
 
         let mut page = vec![0u8; self.chunk_size as usize];
         let chunk = self.chunks[chunk_id].clone();
-        let file = &mut self.segments[chunk.segment_idx];
+        let file = &self.segments[chunk.segment_idx];
 
         if chunk.compressed {
             let mut compressed = vec![0u8; chunk.size as usize];
-            file.seek(SeekFrom::Start(chunk.offset))?;
-            let mut total_read = 0;
-            while total_read < compressed.len() {
-                let n = file.read(&mut compressed[total_read..])?;
-                if n == 0 {
-                    break;
-                }
-                total_read += n;
-            }
+            let total_read = pread(file, &mut compressed, chunk.offset)?;
             let compressed = &compressed[..total_read];
 
             let mut decoder = ZlibDecoder::new(compressed);
@@ -867,17 +912,34 @@ impl EwfReader {
                 }
             }
         } else {
-            file.seek(SeekFrom::Start(chunk.offset))?;
             let to_read = std::cmp::min(chunk.size as usize, page.len());
-            file.read_exact(&mut page[..to_read])?;
+            let n = pread(file, &mut page[..to_read], chunk.offset)?;
+            if n < to_read {
+                // An uncompressed chunk truncated on disk — fail loud rather
+                // than silently serve zero-padded bytes.
+                return Err(EwfError::Io(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("short read for chunk {chunk_id}: got {n} of {to_read} bytes"),
+                )));
+            }
         }
 
-        self.cache.put(chunk_id, page.clone());
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.put(chunk_id, page.clone());
         Ok(page)
     }
 
-    /// Read bytes at an arbitrary logical offset (internal, no position tracking).
-    fn read_at(&mut self, buf: &mut [u8], offset: u64) -> Result<usize> {
+    /// Read bytes at an arbitrary logical offset through a shared `&self`.
+    ///
+    /// Positioned + thread-safe: many threads may call this concurrently on one
+    /// `EwfReader` (e.g. parallel full-image hashing), each decompressing its
+    /// own chunks. Returns the number of bytes read (short only at end of
+    /// image). This is the concurrency-safe counterpart to the cursor-based
+    /// [`Read`] impl, which layers position tracking on top.
+    pub fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let mut buf_idx = 0usize;
         let mut off = offset;
 
@@ -1050,7 +1112,13 @@ impl std::fmt::Debug for EwfReader {
             .field("position", &self.position)
             .field("chunk_count", &self.chunks.len())
             .field("segment_count", &self.segments.len())
-            .field("cache", &self.cache)
+            .field(
+                "cached_chunks",
+                &self
+                    .cache
+                    .try_lock()
+                    .map_or_else(|_| "<locked>".to_string(), |c| c.len().to_string()),
+            )
             .field("stored_md5", &self.stored_md5)
             .field("stored_sha1", &self.stored_sha1)
             .field("metadata", &self.metadata)
