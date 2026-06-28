@@ -301,6 +301,41 @@ mod tests {
         tmp
     }
 
+    /// A synthetic `E01` whose *volume header* declares an arbitrary `chunk_count`,
+    /// while the real table still describes exactly one chunk. The header count
+    /// is the untrusted field behind the 128 GB ceiling bug; the table is the
+    /// source of truth. `chunk_count` sits at file offset 13 (header) + 76
+    /// (volume descriptor) + 4 (within volume data) = 93.
+    fn e01_declaring_chunk_count(data: &[u8], declared: u32) -> tempfile::NamedTempFile {
+        let tmp = build_synthetic_e01(data);
+        let mut bytes = std::fs::read(tmp.path()).unwrap();
+        bytes[93..97].copy_from_slice(&declared.to_le_bytes());
+        std::fs::write(tmp.path(), &bytes).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn large_volume_chunk_count_is_accepted() {
+        // 5M chunks (× 32 KB ≈ 160 GB) exceeds the old 4M cap. A real >128 GB
+        // image must open — the header count is a hint, the table is the truth.
+        let tmp = e01_declaring_chunk_count(b"Hello, forensic world!", 5_000_000);
+        let reader = EwfReader::open(tmp.path())
+            .expect("a >128 GB image must not be rejected by a too-low ceiling");
+        // The REAL chunk count comes from the table (one entry), not the header.
+        assert_eq!(reader.chunk_count(), 1);
+    }
+
+    #[test]
+    fn forged_huge_chunk_count_does_not_over_allocate() {
+        // A forged header claims ~4.3 billion chunks (× 32 B/entry ≈ 137 GB if
+        // reserved blindly). The reservation must be bounded by what the file
+        // can physically describe (4 B/entry), so this opens without OOM.
+        let tmp = e01_declaring_chunk_count(b"x", u32::MAX);
+        let reader = EwfReader::open(tmp.path())
+            .expect("a forged count must be bounded by file size, not OOM or reject");
+        assert_eq!(reader.chunk_count(), 1);
+    }
+
     #[test]
     fn ewf_reader_opens_synthetic_e01() {
         let data = b"Hello, forensic world!";
@@ -1571,7 +1606,7 @@ mod tests {
             .collect();
 
         let d = device_info_utf16.len(); // D
-        let c = compressed.len();        // C
+        let c = compressed.len(); // C
         let table_data_size: usize = 32 + 16; // 32-byte hdr + 16-byte entry = 48
 
         // Absolute file offsets
@@ -1730,20 +1765,20 @@ mod tests {
 
         // Encrypted DESCRIPTOR with DATA_FLAG_ENCRYPTED (0x02)
         let mut desc = [0u8; 64];
-        desc[0..4].copy_from_slice(&0x01u32.to_le_bytes());  // DeviceInfo
-        desc[4..8].copy_from_slice(&0x02u32.to_le_bytes());  // DATA_FLAG_ENCRYPTED
-        desc[8..16].copy_from_slice(&0u64.to_le_bytes());    // previous_offset = 0
+        desc[0..4].copy_from_slice(&0x01u32.to_le_bytes()); // DeviceInfo
+        desc[4..8].copy_from_slice(&0x02u32.to_le_bytes()); // DATA_FLAG_ENCRYPTED
+        desc[8..16].copy_from_slice(&0u64.to_le_bytes()); // previous_offset = 0
         desc[16..24].copy_from_slice(&100u64.to_le_bytes()); // data_size = 100
-        desc[24..28].copy_from_slice(&64u32.to_le_bytes());  // descriptor_size
+        desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
         file_data.extend_from_slice(&desc);
         assert_eq!(file_data.len(), 196);
 
         // Done DESCRIPTOR
         let mut done = [0u8; 64];
-        done[0..4].copy_from_slice(&0x0Fu32.to_le_bytes());  // Done
-        done[8..16].copy_from_slice(&132u64.to_le_bytes());  // previous_offset = 132
-        done[16..24].copy_from_slice(&0u64.to_le_bytes());   // data_size = 0
-        done[24..28].copy_from_slice(&64u32.to_le_bytes());  // descriptor_size
+        done[0..4].copy_from_slice(&0x0Fu32.to_le_bytes()); // Done
+        done[8..16].copy_from_slice(&132u64.to_le_bytes()); // previous_offset = 132
+        done[16..24].copy_from_slice(&0u64.to_le_bytes()); // data_size = 0
+        done[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
         file_data.extend_from_slice(&done);
         assert_eq!(file_data.len(), 260);
 
@@ -1840,7 +1875,11 @@ mod tests {
         entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         file_data.extend_from_slice(&entry);
-        file_data.extend_from_slice(&make_v2_desc(0x04, table_data_size as u64, md5_desc_off as u64));
+        file_data.extend_from_slice(&make_v2_desc(
+            0x04,
+            table_data_size as u64,
+            md5_desc_off as u64,
+        ));
         assert_eq!(file_data.len(), table_desc_off + 64);
 
         // Done DESCRIPTOR
@@ -1977,7 +2016,11 @@ mod tests {
         entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         f.extend_from_slice(&entry);
-        f.extend_from_slice(&make_v2_desc(0x04, table_data_size as u64, sha1_desc_off as u64));
+        f.extend_from_slice(&make_v2_desc(
+            0x04,
+            table_data_size as u64,
+            sha1_desc_off as u64,
+        ));
         assert_eq!(f.len(), table_desc_off + 64);
 
         // Done DESCRIPTOR
@@ -2084,7 +2127,11 @@ mod tests {
         entry[8..12].copy_from_slice(&(c as u32).to_le_bytes());
         entry[12..16].copy_from_slice(&ewf2::CHUNK_FLAG_COMPRESSED.to_le_bytes());
         f.extend_from_slice(&entry);
-        f.extend_from_slice(&make_v2_desc(0x04, table_data_size as u64, sectors_desc_off as u64));
+        f.extend_from_slice(&make_v2_desc(
+            0x04,
+            table_data_size as u64,
+            sectors_desc_off as u64,
+        ));
         assert_eq!(f.len(), table_desc_off + 64);
 
         // Done DESCRIPTOR
@@ -2716,7 +2763,7 @@ mod tests {
         // SectorTable DESCRIPTOR (data_size=48, prev=0)
         let mut tbl_desc = [0u8; 64];
         tbl_desc[0..4].copy_from_slice(&0x04u32.to_le_bytes()); // SectorTable type
-        tbl_desc[8..16].copy_from_slice(&0u64.to_le_bytes());   // previous_offset = 0
+        tbl_desc[8..16].copy_from_slice(&0u64.to_le_bytes()); // previous_offset = 0
         tbl_desc[16..24].copy_from_slice(&48u64.to_le_bytes()); // data_size = 48
         tbl_desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
         d.extend_from_slice(&tbl_desc);
@@ -2725,8 +2772,8 @@ mod tests {
         // Done DESCRIPTOR (data_size=0, prev=80)
         let mut done_desc = [0u8; 64];
         done_desc[0..4].copy_from_slice(&0x0Fu32.to_le_bytes()); // Done type
-        done_desc[8..16].copy_from_slice(&80u64.to_le_bytes());  // previous_offset = 80
-        done_desc[16..24].copy_from_slice(&0u64.to_le_bytes());  // data_size = 0
+        done_desc[8..16].copy_from_slice(&80u64.to_le_bytes()); // previous_offset = 80
+        done_desc[16..24].copy_from_slice(&0u64.to_le_bytes()); // data_size = 0
         done_desc[24..28].copy_from_slice(&64u32.to_le_bytes()); // descriptor_size
         d.extend_from_slice(&done_desc);
         assert_eq!(d.len(), 208);
