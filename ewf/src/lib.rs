@@ -16,6 +16,7 @@ pub(crate) mod ewf2;
 mod parse;
 mod reader;
 mod sections;
+mod segment_source;
 mod types;
 
 // Re-export the public API so external crates see the same `ewf::Foo` paths.
@@ -23,6 +24,7 @@ pub use error::{EwfError, Result};
 pub use parse::parse_error2_data;
 pub use reader::EwfReader;
 pub use sections::{EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry, EVF_SIGNATURE};
+pub use segment_source::SegmentSource;
 #[cfg(feature = "verify")]
 pub use types::VerifyResult;
 pub use types::{AcquisitionError, EwfMetadata, StoredHashes};

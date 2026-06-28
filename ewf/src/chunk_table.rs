@@ -17,15 +17,14 @@
 //! [`parse_table_section`] — and is called from BOTH the eager `open()` and the
 //! lazy `get()` cache-miss path.
 
-use std::fs::File;
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 use lru::LruCache;
 
 use crate::error::Result;
-use crate::reader::pread;
 use crate::sections::{Chunk, TableEntry, SECTION_DESCRIPTOR_SIZE};
+use crate::segment_source::SegmentSource;
 
 /// Number of parsed table sections the lazy cache keeps resident. Real images
 /// split their chunks into ~16 K-entry sections, so 8 sections covers a 4 MB
@@ -166,8 +165,9 @@ impl LazyChunkTable {
     }
 
     /// Return an owned [`Chunk`] for `chunk_id`, parsing (and caching) its table
-    /// section on a cache miss. `segments` is the reader's ordered file handles.
-    pub(crate) fn get(&self, chunk_id: usize, segments: &[File]) -> Result<Chunk> {
+    /// section on a cache miss. `segments` is the reader's ordered segment
+    /// sources (loose file, in-archive sub-range, or in-RAM buffer).
+    pub(crate) fn get(&self, chunk_id: usize, segments: &[SegmentSource]) -> Result<Chunk> {
         let pos = self.section_for(chunk_id).ok_or_else(|| {
             crate::error::EwfError::Parse(format!(
                 "chunk id {chunk_id} out of range (len {})",
@@ -190,14 +190,14 @@ impl LazyChunkTable {
 
         // Cache miss: read this section's entry bytes and parse via the shared
         // routine, so the result is byte-identical to the eager table.
-        let file = segments.get(meta.segment_idx).ok_or_else(|| {
+        let src = segments.get(meta.segment_idx).ok_or_else(|| {
             crate::error::EwfError::Parse(format!(
                 "lazy table section references missing segment {}",
                 meta.segment_idx
             ))
         })?;
         let mut entries_buf = vec![0u8; meta.entry_count * 4];
-        let n = pread(file, &mut entries_buf, meta.entries_file_offset)?;
+        let n = src.read_at(&mut entries_buf, meta.entries_file_offset)?;
         if n < entries_buf.len() {
             return Err(crate::error::EwfError::Parse(format!(
                 "short read for lazy table section at {:#x}: got {n} of {} bytes",
@@ -255,7 +255,7 @@ impl ChunkTable {
 
     /// Owned [`Chunk`] for `chunk_id`. Eager clones from the vec; lazy parses /
     /// serves from its section cache.
-    pub(crate) fn get(&self, chunk_id: usize, segments: &[File]) -> Result<Chunk> {
+    pub(crate) fn get(&self, chunk_id: usize, segments: &[SegmentSource]) -> Result<Chunk> {
         match self {
             ChunkTable::Eager(v) => v.get(chunk_id).cloned().ok_or_else(|| {
                 crate::error::EwfError::Parse(format!(
@@ -296,14 +296,14 @@ impl TableSectionRef {
     /// `first_chunk_id`).
     pub(crate) fn read_header(
         &self,
-        file: &File,
+        src: &SegmentSource,
         seg_idx: usize,
         first_chunk_id: usize,
         max_table_entries: usize,
     ) -> Result<SectionMeta> {
         let hdr_offset = self.desc_offset + SECTION_DESCRIPTOR_SIZE as u64;
         let mut tbl_hdr = [0u8; 24];
-        let n = pread(file, &mut tbl_hdr, hdr_offset)?;
+        let n = src.read_at(&mut tbl_hdr, hdr_offset)?;
         if n < 24 {
             return Err(crate::error::EwfError::Parse(format!(
                 "short read for lazy table header at {hdr_offset:#x}: got {n} of 24 bytes"
