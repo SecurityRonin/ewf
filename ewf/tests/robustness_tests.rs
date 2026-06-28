@@ -129,14 +129,19 @@ fn chunk_size_too_large_is_rejected() {
     );
 }
 
-// ── Test 4: chunk_count above MAX_CHUNK_COUNT causes Vec::reserve to be skipped
+// ── Test 4: a large declared chunk_count is BOUNDED, not rejected
 //
-// `chunks.reserve(vol.chunk_count as usize)` with chunk_count=u32::MAX (4B)
-// would allocate ~128 GB. After fix: early Err(Parse) before the reserve.
+// The volume header's chunk_count is an UNTRUSTED hint, not a hard limit — a real
+// 2 TB image has ~67M chunks. The DoS here is the OLD `chunks.reserve(chunk_count)`
+// (u32::MAX would reserve ~137 GB); the fix bounds the reservation by file size
+// (>= 4 B/chunk) instead of capping the count, so a huge count opens safely rather
+// than rejecting every image over 128 GB (the former 4M ceiling). Regression guard
+// against re-introducing an image-size ceiling.
 
 #[test]
-fn chunk_count_too_large_is_rejected() {
-    // Use 4_000_001 — one above the 4M MAX_TABLE_ENTRIES cap.
+fn large_declared_chunk_count_is_bounded_not_rejected() {
+    // 4_000_001 — one past the former 4M ceiling — with NO table section, so the
+    // real chunk count is zero. Must open (count accepted) without OOMing.
     let huge_chunk_count: u32 = 4_000_001;
     let done_off = (FHDR + 76 + 94 + 76) as u64;
 
@@ -147,9 +152,8 @@ fn chunk_count_too_large_is_rejected() {
     buf.extend_from_slice(&section_desc(b"done", 0, 76));
 
     let (_f, path) = write_temp_e01(&buf);
-    let err = EwfReader::open(&path).expect_err("huge chunk_count must be rejected");
-    assert!(
-        matches!(err, EwfError::Parse(_)),
-        "expected Parse error for huge chunk_count, got {err:?}"
-    );
+    let reader = EwfReader::open(&path)
+        .expect("a large declared chunk_count must be accepted (bounded), not rejected");
+    // No table section -> the inflated header count is ignored; real chunks = 0.
+    assert_eq!(reader.chunk_count(), 0);
 }
