@@ -174,14 +174,56 @@ impl TableEntry {
 }
 
 /// Internal chunk metadata: where to find and how to read one chunk of image data.
+///
+/// Packed to 16 bytes (from 32) because the in-RAM chunk table dominates memory
+/// for large images — one entry per ~32 KB, so a 2 TB image is ~67M entries
+/// (~1 GB packed vs ~2 GB unpacked). The `compressed` flag rides in the offset's
+/// high bit (a file offset is always < 2^63), and `size`/`segment_idx` fit `u32`
+/// (a chunk is capped at 128 MB on disk; segment counts are small). Access goes
+/// through the methods so the packing stays an implementation detail.
 #[derive(Debug, Clone)]
 pub(crate) struct Chunk {
+    /// Bit 63 = zlib-compressed flag; bits 0..63 = file offset within the segment.
+    offset_packed: u64,
     /// Index of the segment file that contains this chunk.
-    pub(crate) segment_idx: usize,
-    /// Whether this chunk is zlib-compressed.
-    pub(crate) compressed: bool,
-    /// Absolute file offset of the chunk data within its segment file.
-    pub(crate) offset: u64,
-    /// Size of the chunk data on disk (compressed size if compressed, else `chunk_size`).
-    pub(crate) size: u64,
+    segment_idx: u32,
+    /// On-disk size: compressed length if compressed, else `chunk_size`.
+    size: u32,
+}
+
+impl Chunk {
+    const COMPRESSED_BIT: u64 = 1 << 63;
+
+    pub(crate) fn new(segment_idx: usize, compressed: bool, offset: u64, size: u64) -> Self {
+        debug_assert!(
+            offset < Self::COMPRESSED_BIT,
+            "EWF file offset must fit 63 bits"
+        );
+        let flag = if compressed { Self::COMPRESSED_BIT } else { 0 };
+        Self {
+            offset_packed: (offset & !Self::COMPRESSED_BIT) | flag,
+            segment_idx: segment_idx as u32,
+            size: size as u32,
+        }
+    }
+
+    pub(crate) fn segment_idx(&self) -> usize {
+        self.segment_idx as usize
+    }
+
+    pub(crate) fn compressed(&self) -> bool {
+        self.offset_packed & Self::COMPRESSED_BIT != 0
+    }
+
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset_packed & !Self::COMPRESSED_BIT
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        u64::from(self.size)
+    }
+
+    pub(crate) fn set_size(&mut self, size: u64) {
+        self.size = size as u32;
+    }
 }

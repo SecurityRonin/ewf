@@ -337,6 +337,19 @@ mod tests {
     }
 
     #[test]
+    fn chunk_struct_stays_compact() {
+        // The in-RAM chunk table dominates memory for large images (one Chunk per
+        // 32 KB). Keep it <= 16 bytes so a 2 TB image's ~67M-entry table is ~1 GB,
+        // not ~2 GB. (compressed flag packed into the offset's high bit; size and
+        // segment_idx narrowed to u32 — a chunk is <= 128 MB, segment counts small.)
+        assert!(
+            std::mem::size_of::<crate::sections::Chunk>() <= 16,
+            "Chunk is {} bytes; the chunk table must stay compact for TB images",
+            std::mem::size_of::<crate::sections::Chunk>()
+        );
+    }
+
+    #[test]
     fn ewf_reader_opens_synthetic_e01() {
         let data = b"Hello, forensic world!";
         let tmp = build_synthetic_e01(data);
@@ -2616,23 +2629,23 @@ mod tests {
         // Both chunks are compressed
         let c0 = reader.chunk_meta(0);
         let c1 = reader.chunk_meta(1);
-        assert!(c0.compressed);
-        assert!(c1.compressed);
+        assert!(c0.compressed());
+        assert!(c1.compressed());
 
         // Chunk 0: back-filled by the existing logic (offset of chunk 1 - offset of chunk 0)
         assert!(
-            c0.size < reader.chunk_size(),
+            c0.size() < reader.chunk_size(),
             "Chunk 0 compressed size should be < chunk_size, got {}",
-            c0.size
+            c0.size()
         );
 
         // Chunk 1 (LAST): this is the bug — without the fix, size == chunk_size (32768).
         // With the fix, size should be the actual compressed length (a few hundred bytes).
         assert!(
-            c1.size < reader.chunk_size(),
+            c1.size() < reader.chunk_size(),
             "Last chunk compressed size should be < chunk_size ({}), got {}",
             reader.chunk_size(),
-            c1.size
+            c1.size()
         );
     }
 
@@ -2645,12 +2658,12 @@ mod tests {
 
         assert_eq!(reader.chunk_count(), 1);
         let c0 = reader.chunk_meta(0);
-        assert!(c0.compressed);
+        assert!(c0.compressed());
         assert!(
-            c0.size < reader.chunk_size(),
+            c0.size() < reader.chunk_size(),
             "Single compressed chunk size should be < chunk_size ({}), got {}",
             reader.chunk_size(),
-            c0.size
+            c0.size()
         );
     }
 

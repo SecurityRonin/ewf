@@ -455,21 +455,21 @@ impl EwfReader {
 
                             if let Some(po) = prev_offset {
                                 if let Some(prev_chunk) = chunks.last_mut() {
-                                    if prev_chunk.compressed {
+                                    if prev_chunk.compressed() {
                                         let sz = abs_offset.saturating_sub(po);
                                         if sz > 0 {
-                                            prev_chunk.size = sz;
+                                            prev_chunk.set_size(sz);
                                         }
                                     }
                                 }
                             }
 
-                            chunks.push(Chunk {
-                                segment_idx: seg_idx,
-                                compressed: entry.compressed,
-                                offset: abs_offset,
-                                size: chunk_size,
-                            });
+                            chunks.push(Chunk::new(
+                                seg_idx,
+                                entry.compressed,
+                                abs_offset,
+                                chunk_size,
+                            ));
 
                             prev_offset = Some(abs_offset);
                         }
@@ -477,10 +477,10 @@ impl EwfReader {
                         // Back-fill last compressed chunk from sectors boundary
                         if let Some(end) = sectors_data_end {
                             if let Some(last) = chunks.last_mut() {
-                                if last.compressed && last.size == chunk_size {
-                                    let actual = end.saturating_sub(last.offset);
+                                if last.compressed() && last.size() == chunk_size {
+                                    let actual = end.saturating_sub(last.offset());
                                     if actual > 0 && actual < chunk_size {
-                                        last.size = actual;
+                                        last.set_size(actual);
                                     }
                                 }
                             }
@@ -692,12 +692,12 @@ impl EwfReader {
                             let start = i * ewf2::TABLE_ENTRY_SIZE;
                             let end = start + ewf2::TABLE_ENTRY_SIZE;
                             let entry = ewf2::Ewf2TableEntry::parse(&entries_buf[start..end])?;
-                            chunks.push(Chunk {
-                                segment_idx: seg_idx,
-                                compressed: entry.is_compressed(),
-                                offset: entry.chunk_data_offset,
-                                size: u64::from(entry.chunk_data_size),
-                            });
+                            chunks.push(Chunk::new(
+                                seg_idx,
+                                entry.is_compressed(),
+                                entry.chunk_data_offset,
+                                u64::from(entry.chunk_data_size),
+                            ));
                         }
                     }
                     ewf2::Ewf2SectionType::Md5Hash if desc.data_size >= 16 => {
@@ -927,11 +927,11 @@ impl EwfReader {
     fn decompress_chunk(&self, chunk_id: usize) -> Result<Vec<u8>> {
         let mut page = vec![0u8; self.chunk_size as usize];
         let chunk = self.chunks[chunk_id].clone();
-        let file = &self.segments[chunk.segment_idx];
+        let file = &self.segments[chunk.segment_idx()];
 
-        if chunk.compressed {
-            let mut compressed = vec![0u8; chunk.size as usize];
-            let total_read = pread(file, &mut compressed, chunk.offset)?;
+        if chunk.compressed() {
+            let mut compressed = vec![0u8; chunk.size() as usize];
+            let total_read = pread(file, &mut compressed, chunk.offset())?;
             let compressed = &compressed[..total_read];
 
             let mut decoder = ZlibDecoder::new(compressed);
@@ -946,8 +946,8 @@ impl EwfReader {
                 }
             }
         } else {
-            let to_read = std::cmp::min(chunk.size as usize, page.len());
-            let n = pread(file, &mut page[..to_read], chunk.offset)?;
+            let to_read = std::cmp::min(chunk.size() as usize, page.len());
+            let n = pread(file, &mut page[..to_read], chunk.offset())?;
             if n < to_read {
                 // An uncompressed chunk truncated on disk — fail loud rather
                 // than silently serve zero-padded bytes.
