@@ -1,5 +1,16 @@
 # ewf
 
+> ## 📦 This repository has moved
+>
+> The `ewf` reader now lives in **[SecurityRonin/ewf-forensic](https://github.com/SecurityRonin/ewf-forensic)**
+> (the `core/` workspace member), alongside the `ewf-forensic` integrity analyzer —
+> following the fleet's one-repo-per-format convention.
+>
+> - **Crate (unchanged):** `ewf` on crates.io — `0.3.0`+ is published from the new repo.
+> - **Development, issues, and releases:** → [ewf-forensic](https://github.com/SecurityRonin/ewf-forensic).
+>
+> This repo is **archived** (read-only); its history is preserved here. `cargo add ewf` still works.
+
 [![Crates.io](https://img.shields.io/crates/v/ewf.svg)](https://crates.io/crates/ewf)
 [![docs.rs](https://img.shields.io/docsrs/ewf)](https://docs.rs/ewf)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
