@@ -139,15 +139,17 @@ const MAX_SECTION_DATA_SIZE: u64 = 1_000_000;
 /// EWF header metadata is plain text; 10 MB is already extremely generous.
 const MAX_DECOMPRESSED_SIZE: u64 = 10 * MAX_SECTION_DATA_SIZE;
 
-/// Maximum table entries we'll allocate for (`DoS` guard).
-/// 4M entries × 32 KB chunks = 128 TB image — far beyond any real forensic image.
+/// Maximum entries in a SINGLE table section (`DoS` guard on the per-section
+/// `entries_buf` allocation: 4M × 4 B = 16 MB). This is NOT an image-size limit —
+/// an image's chunks are spread across many table sections, and the total chunk
+/// count is bounded by real file bytes via `read_exact`, not by this constant.
+/// (The former `MAX_CHUNK_COUNT` rejected `vol.chunk_count > 4M`, i.e. any image
+/// over 4M × 32 KB = 128 GB — a too-low ceiling from a 1000× units slip in its
+/// "128 TB" comment. Removed: the header count is an untrusted hint, not a limit.)
 const MAX_TABLE_ENTRIES: usize = 4_000_000;
 
 /// Maximum chunk size in bytes. EWF typically uses 32 KB; 128 MB is a generous cap.
 const MAX_CHUNK_SIZE: u64 = 128 * 1024 * 1024;
-
-/// Maximum chunk count from the volume header. Reuses the table entry cap.
-const MAX_CHUNK_COUNT: usize = MAX_TABLE_ENTRIES;
 
 /// Default EWF2 chunk size when `device_info` is absent or unparseable.
 const DEFAULT_V2_CHUNK_SIZE: u64 = 32768;
@@ -408,18 +410,21 @@ impl EwfReader {
                                 cs.min(u64::from(u32::MAX)) as u32
                             ));
                         }
-                        if vol.chunk_count as usize > MAX_CHUNK_COUNT {
-                            return Err(EwfError::Parse(format!(
-                                "volume chunk_count {} exceeds maximum {MAX_CHUNK_COUNT}",
-                                vol.chunk_count
-                            )));
-                        }
                         chunk_size = cs;
                         total_size = vol.total_size();
                         if total_size == 0 {
                             total_size = chunk_size * u64::from(vol.chunk_count);
                         }
-                        chunks.reserve(vol.chunk_count as usize);
+                        // `vol.chunk_count` is an UNTRUSTED header hint, NOT a hard
+                        // limit: a real 2 TB image has ~67M chunks (well past any
+                        // fixed ceiling). Bound the up-front reservation by what this
+                        // segment file can physically describe — every chunk costs at
+                        // least a 4-byte table entry, so chunk_count <= file_len / 4.
+                        // A forged giant count thus reserves only what the bytes allow
+                        // (no OOM); the table sections (each bounded by `read_exact`)
+                        // remain the source of truth for the real chunk count.
+                        let plausible_max = file.metadata().map_or(0, |m| (m.len() / 4) as usize);
+                        chunks.reserve((vol.chunk_count as usize).min(plausible_max));
                     }
                     t if t == table_type => {
                         let desc_offset = desc.offset;
