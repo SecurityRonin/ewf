@@ -6,12 +6,16 @@ use std::sync::Mutex;
 use flate2::read::ZlibDecoder;
 use lru::LruCache;
 
+use crate::chunk_table::{
+    parse_table_section, ChunkTable, LazyChunkTable, SectionMeta, TableSectionRef,
+    DEFAULT_SECTION_CACHE,
+};
 use crate::error::{EwfError, Result};
 use crate::ewf2;
 use crate::parse::{parse_error2_data, parse_header_text};
 use crate::sections::{
-    Chunk, EwfFileHeader, EwfVolume, SectionDescriptor, TableEntry, DEFAULT_LRU_SIZE,
-    FILE_HEADER_SIZE, SECTION_DESCRIPTOR_SIZE,
+    Chunk, EwfFileHeader, EwfVolume, SectionDescriptor, DEFAULT_LRU_SIZE, FILE_HEADER_SIZE,
+    SECTION_DESCRIPTOR_SIZE,
 };
 #[cfg(feature = "verify")]
 use crate::types::VerifyResult;
@@ -29,7 +33,7 @@ use crate::types::{AcquisitionError, EwfMetadata, StoredHashes};
 /// `&File` and never touches a shared cursor. That makes it safe to call
 /// concurrently from many threads on one handle: each call carries its own
 /// offset, so there is no read/seek race. Keeps `forbid(unsafe)` (no mmap).
-fn pread(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+pub(crate) fn pread(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
     #[cfg(unix)]
     use std::os::unix::fs::FileExt;
     #[cfg(windows)]
@@ -271,8 +275,9 @@ pub struct EwfReader {
     // We provide a manual impl below.
     /// Opened segment file handles.
     segments: Vec<File>,
-    /// Flat chunk table: chunk[i] covers logical bytes [i*`chunk_size`, (i+1)*`chunk_size`).
-    chunks: Vec<Chunk>,
+    /// Chunk table: chunk[i] covers logical bytes [i*`chunk_size`, (i+1)*`chunk_size`).
+    /// Either eager (flat vec, parsed at open) or lazy (paged section index).
+    chunks: ChunkTable,
     /// Chunk size in bytes (typically 32 KB).
     chunk_size: u64,
     /// Total logical image size in bytes.
@@ -448,43 +453,17 @@ impl EwfReader {
                         let mut entries_buf = vec![0u8; entry_count * 4];
                         file.read_exact(&mut entries_buf)?;
 
-                        let mut prev_offset: Option<u64> = None;
-                        for i in 0..entry_count {
-                            let entry = TableEntry::parse(&entries_buf[i * 4..(i + 1) * 4])?;
-                            let abs_offset = u64::from(entry.chunk_offset) + base_offset;
-
-                            if let Some(po) = prev_offset {
-                                if let Some(prev_chunk) = chunks.last_mut() {
-                                    if prev_chunk.compressed() {
-                                        let sz = abs_offset.saturating_sub(po);
-                                        if sz > 0 {
-                                            prev_chunk.set_size(sz);
-                                        }
-                                    }
-                                }
-                            }
-
-                            chunks.push(Chunk::new(
-                                seg_idx,
-                                entry.compressed,
-                                abs_offset,
-                                chunk_size,
-                            ));
-
-                            prev_offset = Some(abs_offset);
-                        }
-
-                        // Back-fill last compressed chunk from sectors boundary
-                        if let Some(end) = sectors_data_end {
-                            if let Some(last) = chunks.last_mut() {
-                                if last.compressed() && last.size() == chunk_size {
-                                    let actual = end.saturating_sub(last.offset());
-                                    if actual > 0 && actual < chunk_size {
-                                        last.set_size(actual);
-                                    }
-                                }
-                            }
-                        }
+                        // Parse this section's entries via the SHARED routine, so
+                        // the eager table is byte-identical to the lazy path.
+                        let section = parse_table_section(
+                            &entries_buf,
+                            entry_count,
+                            base_offset,
+                            seg_idx,
+                            chunk_size,
+                            sectors_data_end,
+                        )?;
+                        chunks.extend(section);
                     }
                     "hash" => {
                         let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
@@ -562,7 +541,225 @@ impl EwfReader {
 
         Ok(Self {
             segments: ordered_segments,
-            chunks,
+            chunks: ChunkTable::Eager(chunks),
+            chunk_size,
+            total_size,
+            position: 0,
+            cache,
+            stored_md5,
+            stored_sha1,
+            metadata,
+            acquisition_errors,
+        })
+    }
+
+    /// Open an EWF v1 image with a LAZY (paged, on-demand) chunk table.
+    ///
+    /// Identical bytes to [`open`](Self::open) — the lazy table parses each
+    /// `table`/`table2` section's per-entry bytes only when a chunk in it is
+    /// first read, via the SAME [`parse_table_section`] routine the eager path
+    /// uses. Trades a small per-read section lookup (binary search + an
+    /// occasional section parse on cache miss) for not holding the full
+    /// `chunk_count * size_of::<Chunk>()` table resident.
+    ///
+    /// EWF v2 (Ex01/Lx01) images fall back to the eager path: lazy is v1-only.
+    pub fn open_lazy<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let paths = discover_segments(path.as_ref())?;
+        Self::open_segments_lazy(&paths, DEFAULT_LRU_SIZE, DEFAULT_SECTION_CACHE)
+    }
+
+    /// Open EWF v1 from explicit segment paths with a lazy chunk table.
+    ///
+    /// `cache_size` is the decompressed-chunk LRU (as elsewhere); `section_cache`
+    /// is how many parsed table sections the lazy index keeps resident.
+    ///
+    /// Mirrors [`open_segments_with_cache_size`]'s v1 descriptor walk and section
+    /// handling exactly, EXCEPT for `table`/`table2` sections: instead of reading
+    /// and parsing every per-entry byte, it reads only each section's 24-byte
+    /// header and records a [`SectionMeta`]. Per-entry parsing is deferred to the
+    /// first read of a chunk in that section.
+    fn open_segments_lazy(
+        paths: &[PathBuf],
+        cache_size: usize,
+        section_cache: usize,
+    ) -> Result<Self> {
+        if paths.is_empty() {
+            return Err(EwfError::NoSegments("empty path list".into()));
+        }
+
+        // Version probe: EWF2 has no lazy path yet — defer to the eager v2 open.
+        {
+            let mut probe = File::open(&paths[0])?;
+            let mut sig = [0u8; 8];
+            probe.read_exact(&mut sig)?;
+            if sig == ewf2::EVF2_SIGNATURE || sig == ewf2::LEF2_SIGNATURE {
+                return Self::open_segments_v2(paths, cache_size);
+            }
+        }
+
+        let mut segments = Vec::with_capacity(paths.len());
+        let mut headers = Vec::with_capacity(paths.len());
+        for path in paths {
+            let mut f = File::open(path)?;
+            let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
+            f.read_exact(&mut hdr_buf)?;
+            headers.push(EwfFileHeader::parse(&hdr_buf)?);
+            segments.push(f);
+        }
+
+        let segment_numbers: Vec<u32> = headers
+            .iter()
+            .map(|h| u32::from(h.segment_number))
+            .collect();
+        let mut ordered_segments = validate_and_reorder_segments(segments, segment_numbers)?;
+
+        let mut chunk_size: u64 = 0;
+        let mut total_size: u64 = 0;
+        let mut index: Vec<SectionMeta> = Vec::new();
+        let mut next_chunk_id: usize = 0;
+        let mut stored_md5: Option<[u8; 16]> = None;
+        let mut stored_sha1: Option<[u8; 20]> = None;
+        let mut metadata = EwfMetadata::default();
+        let mut acquisition_errors: Vec<AcquisitionError> = Vec::new();
+
+        for (seg_idx, file) in ordered_segments.iter_mut().enumerate() {
+            let mut desc_offset: u64 = FILE_HEADER_SIZE as u64;
+            let mut descriptors = Vec::new();
+
+            let file_len = file.seek(SeekFrom::End(0))?;
+            while let Some(chain_end) = desc_offset.checked_add(SECTION_DESCRIPTOR_SIZE as u64) {
+                if chain_end > file_len {
+                    log::debug!("truncated chain at {desc_offset}, EOF {file_len}");
+                    break;
+                }
+                file.seek(SeekFrom::Start(desc_offset))?;
+                let mut desc_buf = [0u8; SECTION_DESCRIPTOR_SIZE];
+                file.read_exact(&mut desc_buf)?;
+                let desc = SectionDescriptor::parse(&desc_buf, desc_offset)?;
+                let next = desc.next;
+                descriptors.push(desc);
+                if next == 0 || next <= desc_offset {
+                    break;
+                }
+                desc_offset = next;
+            }
+
+            let has_table = descriptors.iter().any(|d| d.section_type == "table");
+            let table_type = if has_table { "table" } else { "table2" };
+
+            let sectors_data_end: Option<u64> = descriptors
+                .iter()
+                .find(|d| d.section_type == "sectors")
+                .map(|d| d.offset.saturating_add(d.section_size));
+
+            for desc in &descriptors {
+                match desc.section_type.as_str() {
+                    "volume" | "disk" => {
+                        let mut vol_buf = [0u8; 94];
+                        file.seek(SeekFrom::Start(
+                            desc.offset + SECTION_DESCRIPTOR_SIZE as u64,
+                        ))?;
+                        file.read_exact(&mut vol_buf)?;
+                        let vol = EwfVolume::parse(&vol_buf)?;
+                        let cs = vol.chunk_size();
+                        if cs > MAX_CHUNK_SIZE {
+                            return Err(EwfError::InvalidChunkSize(
+                                cs.min(u64::from(u32::MAX)) as u32
+                            ));
+                        }
+                        chunk_size = cs;
+                        total_size = vol.total_size();
+                        if total_size == 0 {
+                            total_size = chunk_size * u64::from(vol.chunk_count);
+                        }
+                    }
+                    t if t == table_type => {
+                        // LIGHT pass: read only the 24-byte header (entry_count +
+                        // base_offset). The per-entry bytes are NOT read here.
+                        let section_ref = TableSectionRef {
+                            desc_offset: desc.offset,
+                            sectors_data_end,
+                        };
+                        let meta = section_ref.read_header(
+                            file,
+                            seg_idx,
+                            next_chunk_id,
+                            MAX_TABLE_ENTRIES,
+                        )?;
+                        next_chunk_id += meta.entry_count;
+                        index.push(meta);
+                    }
+                    "hash" => {
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut hash_buf = [0u8; 16];
+                        file.read_exact(&mut hash_buf)?;
+                        if stored_md5.is_none() {
+                            stored_md5 = Some(hash_buf);
+                        }
+                    }
+                    "digest" => {
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        file.seek(SeekFrom::Start(data_offset))?;
+                        let mut digest_buf = [0u8; 36];
+                        file.read_exact(&mut digest_buf)?;
+                        let mut md5 = [0u8; 16];
+                        let mut sha1 = [0u8; 20];
+                        md5.copy_from_slice(&digest_buf[0..16]);
+                        sha1.copy_from_slice(&digest_buf[16..36]);
+                        stored_md5 = Some(md5);
+                        stored_sha1 = Some(sha1);
+                    }
+                    "header" if metadata.case_number.is_none() && metadata.os_version.is_none() => {
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        let data_size = desc
+                            .section_size
+                            .saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut compressed = vec![0u8; data_size as usize];
+                            file.read_exact(&mut compressed)?;
+                            let mut decompressed = Vec::new();
+                            let mut limited = std::io::Read::take(
+                                flate2::read::ZlibDecoder::new(&compressed[..]),
+                                MAX_DECOMPRESSED_SIZE,
+                            );
+                            if std::io::Read::read_to_end(&mut limited, &mut decompressed).is_ok() {
+                                let text = String::from_utf8_lossy(&decompressed);
+                                parse_header_text(&text, &mut metadata);
+                            }
+                        }
+                    }
+                    "error2" => {
+                        let data_offset = desc.offset + SECTION_DESCRIPTOR_SIZE as u64;
+                        let data_size = desc
+                            .section_size
+                            .saturating_sub(SECTION_DESCRIPTOR_SIZE as u64);
+                        if data_size > 0 && data_size < MAX_SECTION_DATA_SIZE {
+                            file.seek(SeekFrom::Start(data_offset))?;
+                            let mut buf = vec![0u8; data_size as usize];
+                            file.read_exact(&mut buf)?;
+                            acquisition_errors = parse_error2_data(&buf);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if chunk_size == 0 {
+            return Err(EwfError::MissingVolume);
+        }
+
+        let lazy = LazyChunkTable::new(index, chunk_size, section_cache);
+
+        let cache = Mutex::new(LruCache::new(
+            std::num::NonZeroUsize::new(cache_size.max(1)).unwrap(),
+        ));
+
+        Ok(Self {
+            segments: ordered_segments,
+            chunks: ChunkTable::Lazy(lazy),
             chunk_size,
             total_size,
             position: 0,
@@ -748,7 +945,7 @@ impl EwfReader {
 
         Ok(Self {
             segments: ordered_segments,
-            chunks,
+            chunks: ChunkTable::Eager(chunks),
             chunk_size,
             total_size,
             position: 0,
@@ -778,10 +975,41 @@ impl EwfReader {
         self.chunks.len()
     }
 
-    /// Access raw chunk metadata (for testing/diagnostics).
+    /// Resident bytes of the chunk table (benchmark instrumentation).
+    ///
+    /// Eager = `chunk_count * size_of::<Chunk>()`; lazy = section index +
+    /// currently-cached parsed sections.
+    #[must_use]
+    pub fn resident_table_bytes(&self) -> usize {
+        self.chunks.resident_table_bytes()
+    }
+
+    /// Whether this reader uses the lazy (paged) chunk table.
+    #[must_use]
+    pub fn is_lazy(&self) -> bool {
+        matches!(self.chunks, ChunkTable::Lazy(_))
+    }
+
+    /// Access raw chunk metadata (for testing/diagnostics). Returns an owned
+    /// [`Chunk`] — lazy tables materialize on demand, so a borrow is not stable.
     #[cfg(test)]
-    pub(crate) fn chunk_meta(&self, idx: usize) -> &Chunk {
-        &self.chunks[idx]
+    pub(crate) fn chunk_meta(&self, idx: usize) -> Chunk {
+        self.chunks
+            .get(idx, &self.segments)
+            .expect("chunk_meta: chunk id in range")
+    }
+
+    /// Diagnostic accessor: `(file_offset, on_disk_size, compressed, segment_idx)`
+    /// for chunk `idx`. Used by the eager-vs-lazy byte-identity test to assert
+    /// per-chunk metadata parity (offset/size/flag/segment), not just decoded
+    /// bytes. Eager clones from the vec; lazy materializes the chunk on demand.
+    ///
+    /// # Errors
+    /// Returns an error if `idx` is out of range or a lazy section read fails.
+    #[doc(hidden)]
+    pub fn debug_chunk(&self, idx: usize) -> Result<(u64, u64, bool, usize)> {
+        let c = self.chunks.get(idx, &self.segments)?;
+        Ok((c.offset(), c.size(), c.compressed(), c.segment_idx()))
     }
 
     /// Returns the integrity hashes stored within the EWF image by the acquisition tool.
@@ -926,7 +1154,7 @@ impl EwfReader {
     /// + decompress, all through `&self`.
     fn decompress_chunk(&self, chunk_id: usize) -> Result<Vec<u8>> {
         let mut page = vec![0u8; self.chunk_size as usize];
-        let chunk = self.chunks[chunk_id].clone();
+        let chunk = self.chunks.get(chunk_id, &self.segments)?;
         let file = &self.segments[chunk.segment_idx()];
 
         if chunk.compressed() {

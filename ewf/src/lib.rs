@@ -10,6 +10,7 @@
 //! - Hash verification (`verify()`) with MD5 and SHA-1
 //! - Case metadata, stored hashes, and acquisition error parsing
 
+mod chunk_table;
 mod error;
 pub(crate) mod ewf2;
 mod parse;
